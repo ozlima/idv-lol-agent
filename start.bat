@@ -3,6 +3,9 @@ title IDV LoL Agent
 color 0A
 chcp 65001 >nul
 
+set "NODE_DIR=%LOCALAPPDATA%\IDV Tracker\runtime\node-v20.11.1-win-x64"
+if exist "%NODE_DIR%\node.exe" set "PATH=%NODE_DIR%;%PATH%"
+
 echo.
 echo  ╔══════════════════════════════════════╗
 echo  ║       IDV LoL Agent                  ║
@@ -14,19 +17,7 @@ echo.
 where node >nul 2>&1
 if %errorlevel% neq 0 (
     echo  [ERRO] Node.js nao encontrado.
-    echo  Baixe e instale em: https://nodejs.org
-    echo  Reinicie o PC apos instalar e tente de novo.
-    echo.
-    pause
-    exit /b 1
-)
-
-:: Verifica Git
-where git >nul 2>&1
-if %errorlevel% neq 0 (
-    echo  [ERRO] Git nao encontrado.
-    echo  Baixe e instale em: https://git-scm.com/download/win
-    echo  Reinicie o PC apos instalar e tente de novo.
+    echo  Rode o IDV-Tracker-Setup.cmd para instalar o Node.js portatil.
     echo.
     pause
     exit /b 1
@@ -39,13 +30,6 @@ if not exist ".env" (
     echo.
     pause
     exit /b 1
-)
-
-:: Conecta ao repositorio remoto se ainda nao estiver
-git remote get-url origin >nul 2>&1
-if %errorlevel% neq 0 (
-    echo  Conectando ao repositorio...
-    git remote add origin https://github.com/ozlima/idv-lol-agent.git
 )
 
 :: Instala dependencias na primeira vez

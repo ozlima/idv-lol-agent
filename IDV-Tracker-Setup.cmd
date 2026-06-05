@@ -48,9 +48,10 @@ call :log "Baixando arquivos do instalador..."
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ErrorActionPreference='Stop';" ^
   "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;" ^
-  "Invoke-WebRequest '%REPO_RAW%/IDV-Tracker-Installer/IDV-Tracker.bat' -OutFile '%BOOTSTRAP%';" ^
-  "Invoke-WebRequest '%REPO_RAW%/IDV-Tracker-Installer/installer.ps1' -OutFile '%INSTALLER%';" ^
-  "Invoke-WebRequest '%REPO_RAW%/IDV-Tracker-Installer/icon.png' -OutFile '%ICON%';" >> "%SETUP_LOG%" 2>&1
+  "$cache=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds();" ^
+  "Invoke-WebRequest ('%REPO_RAW%/IDV-Tracker-Installer/IDV-Tracker.bat?v=' + $cache) -OutFile '%BOOTSTRAP%';" ^
+  "Invoke-WebRequest ('%REPO_RAW%/IDV-Tracker-Installer/installer.ps1?v=' + $cache) -OutFile '%INSTALLER%';" ^
+  "Invoke-WebRequest ('%REPO_RAW%/IDV-Tracker-Installer/icon.png?v=' + $cache) -OutFile '%ICON%';" >> "%SETUP_LOG%" 2>&1
 if errorlevel 1 (
     call :fail "Erro ao baixar arquivos do GitHub. Confira a internet e mande o setup.log."
     exit /b 1
