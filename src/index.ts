@@ -1,4 +1,6 @@
 import { execSync } from "child_process"
+import { copyFileSync, existsSync } from "fs"
+import { dirname, join } from "path"
 import { createClient, type RealtimeChannel } from "@supabase/supabase-js"
 import { waitForLcu, subscribeToGameflow, getChampSelectSession, getCurrentSummoner, getCurrentRunes, lcuGet } from "./lcu.js"
 import { getAllGameData, isGameRunning, type AllGameData, type LiveGameEvent } from "./live-client.js"
@@ -480,6 +482,99 @@ async function handleGameEnd() {
 
 // ─── Phase handler ────────────────────────────────────────────────────────────
 
+// Auto-update
+let codeUpdateInProgress = false
+
+function run(command: string) {
+  return execSync(command, {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim()
+}
+
+function isGitCheckout(): boolean {
+  try {
+    return run("git rev-parse --is-inside-work-tree") === "true"
+  } catch {
+    return false
+  }
+}
+
+function getUpstreamRef(): string {
+  try {
+    return run("git rev-parse --abbrev-ref --symbolic-full-name @{u}")
+  } catch {
+    return "origin/master"
+  }
+}
+
+function restartAgent(isUnderPM2: boolean) {
+  setTimeout(() => {
+    if (isUnderPM2) {
+      execSync("pm2 restart idv-lol-agent", { stdio: "inherit" })
+    } else {
+      process.exit(42)
+    }
+  }, 3_000)
+}
+
+function refreshBootstrapLauncher() {
+  const source = join(process.cwd(), "IDV-Tracker.bat")
+  const target = join(dirname(process.cwd()), "IDV-Tracker.bat")
+  if (!existsSync(source)) return
+
+  try {
+    copyFileSync(source, target)
+    console.log("[agent] Launcher atualizado")
+  } catch (e) {
+    console.warn("[agent] Nao foi possivel atualizar o launcher:", (e as Error).message)
+  }
+}
+
+function applyCodeUpdate(reason: string, isUnderPM2: boolean): boolean {
+  if (codeUpdateInProgress) return false
+  codeUpdateInProgress = true
+
+  try {
+    console.log(`[agent] Update detectado (${reason}) - baixando codigo novo...`)
+    execSync("git pull --ff-only", { stdio: "inherit", cwd: process.cwd() })
+    refreshBootstrapLauncher()
+    execSync("npm install --silent", { stdio: "pipe", cwd: process.cwd() })
+    console.log("[agent] Codigo atualizado. Reiniciando em 3s...")
+    restartAgent(isUnderPM2)
+    return true
+  } catch (e) {
+    codeUpdateInProgress = false
+    console.error("[agent] Falha ao atualizar:", (e as Error).message)
+    return false
+  }
+}
+
+function checkForCodeUpdate(isUnderPM2: boolean) {
+  if (codeUpdateInProgress || !isGitCheckout()) return
+
+  try {
+    const upstream = getUpstreamRef()
+    execSync("git fetch --quiet origin", { stdio: "pipe", cwd: process.cwd() })
+
+    const localHead = run("git rev-parse HEAD")
+    const remoteHead = run(`git rev-parse ${upstream}`)
+
+    if (localHead && remoteHead && localHead !== remoteHead) {
+      applyCodeUpdate(`git ${upstream}`, isUnderPM2)
+    }
+  } catch (e) {
+    console.warn("[agent] Nao foi possivel checar update:", (e as Error).message)
+  }
+}
+
+function startAutoUpdateChecker(isUnderPM2: boolean) {
+  checkForCodeUpdate(isUnderPM2)
+  setInterval(() => checkForCodeUpdate(isUnderPM2), 5 * 60_000)
+  console.log("[agent] Auto-update ativo (GitHub a cada 5min)")
+}
+
 async function onPhaseChange(phase: string) {
   if (phase === currentPhase) return
   const prev = currentPhase
@@ -546,6 +641,7 @@ async function main() {
   console.log("[agent] Aguardando eventos do LoL...")
 
   const isUnderPM2 = !!process.env.PM2_HOME
+  startAutoUpdateChecker(isUnderPM2)
 
   // ── Presença online ────────────────────────────────────────────────────────
   const presenceClient = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!)
@@ -566,21 +662,7 @@ async function main() {
   adminClient
     .channel("idv-agent-admin")
     .on("broadcast", { event: "update" }, () => {
-      console.log("[agent] Update recebido — baixando código novo...")
-      try {
-        execSync("git pull", { stdio: "inherit", cwd: process.cwd() })
-        execSync("npm install --silent", { stdio: "pipe", cwd: process.cwd() })
-        console.log("[agent] Código atualizado! Reiniciando em 3s...")
-        setTimeout(() => {
-          if (isUnderPM2) {
-            execSync("pm2 restart idv-lol-agent", { stdio: "inherit" })
-          } else {
-            process.exit(42)
-          }
-        }, 3_000)
-      } catch (e) {
-        console.error("[agent] Falha ao atualizar:", (e as Error).message)
-      }
+      applyCodeUpdate("comando admin", isUnderPM2)
     })
     .subscribe((status) => {
       if (status === "SUBSCRIBED") console.log("[agent] Canal admin conectado")

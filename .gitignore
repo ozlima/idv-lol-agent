@@ -1,4 +1,6 @@
 node_modules/
 .env
 IDV-LoL-Agent.bat
+idv-lol-agent/
+IDV-Tracker-Installer.zip
 *.js.map
