@@ -4,8 +4,8 @@ title IDV LoL Agent
 
 :: ════════════════════════════════════════════════════
 ::  Preencha as credenciais abaixo antes de enviar:
-set SUPABASE_URL=https://COLE_AQUI.supabase.co
-set SUPABASE_ANON_KEY=COLE_AQUI_A_ANON_KEY
+set SUPABASE_URL=https://tninlfmhruccphpncahs.supabase.co
+set SUPABASE_ANON_KEY=sb_publishable_ILxcIFs_94-MnEc-AuDVVg_i8P0Eb1D
 :: ════════════════════════════════════════════════════
 
 set DIR=%~dp0idv-lol-agent
