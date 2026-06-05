@@ -24,9 +24,12 @@ if %errorlevel% neq 0 (
 :: Verifica Git
 where git >nul 2>&1
 if %errorlevel% neq 0 (
-    echo  [AVISO] Git nao encontrado — atualizacoes automaticas nao funcionarao.
-    echo  Para habilitar: https://git-scm.com/download/win
+    echo  [ERRO] Git nao encontrado.
+    echo  Baixe e instale em: https://git-scm.com/download/win
+    echo  Reinicie o PC apos instalar e tente de novo.
     echo.
+    pause
+    exit /b 1
 )
 
 :: Verifica .env
@@ -36,6 +39,13 @@ if not exist ".env" (
     echo.
     pause
     exit /b 1
+)
+
+:: Conecta ao repositorio remoto se ainda nao estiver
+git remote get-url origin >nul 2>&1
+if %errorlevel% neq 0 (
+    echo  Conectando ao repositorio...
+    git remote add origin https://github.com/ozlima/idv-lol-agent.git
 )
 
 :: Instala dependencias na primeira vez
@@ -59,7 +69,9 @@ echo.
 call npm run dev
 if %errorlevel% == 42 (
     echo.
-    echo  Reiniciando apos atualizacao...
+    echo  Atualizando dependencias...
+    call npm install --silent
+    echo  Reiniciando...
     echo.
     goto loop
 )
