@@ -2,6 +2,7 @@ $TargetDir = $env:IDV_TARGET_DIR
 $IconPath  = $env:IDV_ICON_PATH
 $SupaUrl   = $env:SUPABASE_URL
 $SupaKey   = $env:SUPABASE_ANON_KEY
+$SetupLog  = $env:IDV_SETUP_LOG
 $StartupVbs = [System.IO.Path]::Combine(
     $env:APPDATA,
     "Microsoft\Windows\Start Menu\Programs\Startup\IDV-LoL-Agent.vbs"
@@ -181,6 +182,7 @@ $sync = [hashtable]::Synchronized(@{
     SupaUrl         = $SupaUrl
     SupaKey         = $SupaKey
     StartupVbs      = $StartupVbs
+    SetupLog        = $SetupLog
     Dispatcher      = $window.Dispatcher
     PanelInstalling = $PanelInstalling
     PanelDone       = $PanelDone
@@ -202,6 +204,7 @@ $ps.Runspace = $rs
     $url  = $sync.SupaUrl
     $key  = $sync.SupaKey
     $vbs  = $sync.StartupVbs
+    $setupLog = $sync.SetupLog
     $d    = $sync.Dispatcher
 
     function Ui([scriptblock]$sb) { $d.Invoke([System.Action]$sb) }
@@ -258,6 +261,11 @@ $ps.Runspace = $rs
     }
     catch {
         $msg = $_.Exception.Message
+        if ($setupLog) {
+            try {
+                Add-Content -Path $setupLog -Value "[installer] ERRO: $msg" -Encoding UTF8
+            } catch {}
+        }
         Ui {
             $sync.PanelInstalling.Visibility = [System.Windows.Visibility]::Collapsed
             $sync.TxtError.Text              = $msg

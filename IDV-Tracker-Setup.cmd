@@ -59,6 +59,7 @@ if errorlevel 1 (
 )
 
 call :log "Iniciando instalador visual..."
+set "IDV_SETUP_LOG=%SETUP_LOG%"
 call "%BOOTSTRAP%" >> "%SETUP_LOG%" 2>&1
 if errorlevel 1 (
     call :fail "O instalador retornou erro. Mande o setup.log."
