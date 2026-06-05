@@ -17,7 +17,7 @@ Add-Type -AssemblyName WindowsBase
         Title="IDV Tracker" Width="400" Height="480"
         WindowStartupLocation="CenterScreen"
         ResizeMode="NoResize" WindowStyle="None"
-        AllowsTransparency="True" Background="Transparent"
+        Background="#0A0C14"
         Topmost="True">
   <Border Background="#0A0C14" CornerRadius="14"
           BorderBrush="#141C2E" BorderThickness="1">
