@@ -17,7 +17,8 @@ Add-Type -AssemblyName WindowsBase
         Title="IDV Tracker" Width="400" Height="480"
         WindowStartupLocation="CenterScreen"
         ResizeMode="NoResize" WindowStyle="None"
-        AllowsTransparency="True" Background="Transparent">
+        AllowsTransparency="True" Background="Transparent"
+        Topmost="True">
   <Border Background="#0A0C14" CornerRadius="14"
           BorderBrush="#141C2E" BorderThickness="1">
     <Border.Effect>
@@ -141,8 +142,14 @@ Add-Type -AssemblyName WindowsBase
 </Window>
 '@
 
-$reader = New-Object System.Xml.XmlNodeReader $XAML
-$window = [Windows.Markup.XamlReader]::Load($reader)
+try {
+    $reader = New-Object System.Xml.XmlNodeReader $XAML
+    $window = [Windows.Markup.XamlReader]::Load($reader)
+} catch {
+    Add-Type -AssemblyName System.Windows.Forms
+    [System.Windows.Forms.MessageBox]::Show("Erro ao carregar janela:`n$($_.Exception.Message)", "IDV Tracker - Erro", "OK", "Error")
+    exit 1
+}
 
 $BtnClose        = $window.FindName("BtnClose")
 $ImgIcon         = $window.FindName("ImgIcon")
