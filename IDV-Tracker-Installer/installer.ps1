@@ -211,9 +211,27 @@ $ps.Runspace = $rs
     try {
         # npm install
         if (-not (Test-Path (Join-Path $dir "node_modules"))) {
-            $r = Start-Process "cmd" -ArgumentList "/c npm install --silent" `
-                 -WorkingDirectory $dir -Wait -PassThru -NoNewWindow
-            if ($r.ExitCode -ne 0) { throw "Falha ao instalar pacotes (npm)." }
+            $installLog = Join-Path $dir "install.log"
+            "IDV Tracker npm install" | Set-Content -Path $installLog -Encoding UTF8
+            "node: $(& node.exe -v 2>$null)" | Add-Content -Path $installLog -Encoding UTF8
+            "npm: $(& npm.cmd -v 2>$null)" | Add-Content -Path $installLog -Encoding UTF8
+            "" | Add-Content -Path $installLog -Encoding UTF8
+
+            Push-Location $dir
+            try {
+                & npm.cmd install --no-audit --no-fund *>> $installLog
+                $exitCode = $LASTEXITCODE
+            } finally {
+                Pop-Location
+            }
+
+            if ($exitCode -ne 0) {
+                $tail = ""
+                if (Test-Path $installLog) {
+                    $tail = (Get-Content -Path $installLog -Tail 12) -join "`n"
+                }
+                throw "Falha ao instalar pacotes (npm). Log: $installLog`n$tail"
+            }
         }
 
         # .env

@@ -15,6 +15,7 @@ set "BOOTSTRAP=%SETUP_DIR%\IDV-Tracker.bat"
 set "INSTALLER=%SETUP_DIR%\installer.ps1"
 set "ICON=%SETUP_DIR%\icon.png"
 set "SETUP_LOG=%SETUP_DIR%\setup.log"
+set "INSTALL_LOG=%APP_ROOT%\idv-lol-agent\install.log"
 set "AGENT_LOG=%APP_ROOT%\idv-lol-agent\agent.log"
 
 if not exist "%SETUP_DIR%" mkdir "%SETUP_DIR%" >nul 2>&1
@@ -77,8 +78,17 @@ if exist "%AGENT_LOG%" (
     echo.
 )
 
+if exist "%INSTALL_LOG%" (
+    echo Ultimas linhas do install.log:
+    echo ----------------------------------------
+    powershell -NoProfile -Command "Get-Content -LiteralPath '%INSTALL_LOG%' -Tail 80"
+    echo ----------------------------------------
+    echo.
+)
+
 echo Logs para debug:
 echo   Setup: "%SETUP_LOG%"
+echo   Install: "%INSTALL_LOG%"
 echo   Agent: "%AGENT_LOG%"
 echo.
 echo Se o agent nao aparecer online, copie e mande esses dois logs.
