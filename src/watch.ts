@@ -314,6 +314,31 @@ setInterval(() => {
   }
 }, 1_000)
 
+// ─── Usuários online ──────────────────────────────────────────────────────────
+
+interface PresenceState {
+  gameName: string
+  tagLine:  string
+  phase:    string
+  since:    string
+}
+
+const onlineUsers = new Map<string, PresenceState>()  // keyed by puuid
+
+function printOnlineStatus() {
+  if (onlineUsers.size === 0) {
+    console.log(`\n${GRAY}Nenhum agent online agora${R}\n`)
+    return
+  }
+  console.log(`\n${B}🟢 Agents online (${onlineUsers.size}):${R}`)
+  for (const [puuid, u] of onlineUsers) {
+    const name  = u.gameName ? `${CYAN}${B}${u.gameName}#${u.tagLine}${R}` : `${GRAY}${puuid.slice(0, 8)}...${R}`
+    const phase = u.phase !== "None" && u.phase !== "Lobby" ? ` ${YELLOW}[${u.phase}]${R}` : ""
+    console.log(`  ${name}${phase}`)
+  }
+  console.log()
+}
+
 // ─── Teclado ──────────────────────────────────────────────────────────────────
 
 readline.emitKeypressEvents(process.stdin)
@@ -323,6 +348,7 @@ process.stdin.on("keypress", (_ch: string, key: { name: string; ctrl: boolean })
   if (!key) return
   if (key.ctrl && key.name === "c") process.exit()
   if (key.name === "f") { printFlashStatus(); return }
+  if (key.name === "p") { printOnlineStatus(); return }
   const n = parseInt(key.name)
   if (n >= 1 && n <= 5) markFlash(String(n))
 })
@@ -331,7 +357,47 @@ process.stdin.on("keypress", (_ch: string, key: { name: string; ctrl: boolean })
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
 console.log(`\n${B}lol-agent watcher${R} — aguardando eventos`)
-console.log(`${DIM}⚡ Flash: [1-5] marcar uso  [f] ver status  (pressione de novo para resetar)${R}\n`)
+console.log(`${DIM}⚡ Flash: [1-5] marcar uso  [f] ver status  [p] agents online${R}\n`)
+
+// Presença — quem está rodando o agent agora
+const presenceChan = supabase.channel("idv-agent-presence")
+
+function syncPresenceState() {
+  const state = presenceChan.presenceState<PresenceState & { puuid: string }>()
+  onlineUsers.clear()
+  for (const presences of Object.values(state)) {
+    const p = presences[0]
+    if (p?.puuid) onlineUsers.set(p.puuid, { gameName: p.gameName, tagLine: p.tagLine, phase: p.phase, since: p.since })
+  }
+}
+
+presenceChan
+  .on("presence", { event: "sync" }, () => {
+    syncPresenceState()
+  })
+  .on("presence", { event: "join" }, ({ newPresences }) => {
+    for (const p of newPresences as unknown as Array<PresenceState & { puuid: string }>) {
+      if (!p.puuid) continue
+      onlineUsers.set(p.puuid, { gameName: p.gameName, tagLine: p.tagLine, phase: p.phase, since: p.since })
+      const name = p.gameName ? `${CYAN}${B}${p.gameName}#${p.tagLine}${R}` : p.puuid.slice(0, 8)
+      console.log(`\n${ts()} 🟢 ${GREEN}Agent online:${R} ${name}\n`)
+    }
+  })
+  .on("presence", { event: "leave" }, ({ leftPresences }) => {
+    for (const p of leftPresences as unknown as Array<PresenceState & { puuid: string }>) {
+      if (!p.puuid) continue
+      const entry = onlineUsers.get(p.puuid)
+      const name  = entry?.gameName ? `${CYAN}${B}${entry.gameName}#${entry.tagLine}${R}` : p.puuid.slice(0, 8)
+      onlineUsers.delete(p.puuid)
+      console.log(`\n${ts()} 🔴 ${GRAY}Agent offline:${R} ${name}\n`)
+    }
+  })
+  .subscribe((status) => {
+    if (status === "SUBSCRIBED") {
+      syncPresenceState()
+      console.log(`${GREEN}✓ Presença conectada${onlineUsers.size > 0 ? ` — ${onlineUsers.size} online` : ""}${R}`)
+    }
+  })
 
 supabase
   .channel("live_game_events_watch")

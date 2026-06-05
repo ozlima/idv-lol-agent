@@ -1,5 +1,5 @@
 import { execSync } from "child_process"
-import { createClient } from "@supabase/supabase-js"
+import { createClient, type RealtimeChannel } from "@supabase/supabase-js"
 import { waitForLcu, subscribeToGameflow, getChampSelectSession, getCurrentSummoner, getCurrentRunes, lcuGet } from "./lcu.js"
 import { getAllGameData, isGameRunning, type AllGameData, type LiveGameEvent } from "./live-client.js"
 import { publishEvent } from "./publisher.js"
@@ -63,6 +63,19 @@ type GamePhase =
 let currentPhase: GamePhase = "None"
 let myPuuid: string | null = null
 let myGameName: string | null = null
+
+// Presence
+let presenceChannel: RealtimeChannel | null = null
+let presenceMeta: { puuid: string; gameName: string; tagLine: string } | null = null
+
+async function updatePresence(phase: string) {
+  if (!presenceChannel || !presenceMeta) return
+  await presenceChannel.track({
+    ...presenceMeta,
+    phase,
+    since: new Date().toISOString(),
+  }).catch(() => null)
+}
 
 // Champ select state
 let champSelectPollInterval: ReturnType<typeof setInterval> | null = null
@@ -500,6 +513,8 @@ async function onPhaseChange(phase: string) {
     champSelectSent = false
     lastHoverChampId = 0
   }
+
+  void updatePresence(phase)
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -530,7 +545,23 @@ async function main() {
   await subscribeToGameflow(onPhaseChange)
   console.log("[agent] Aguardando eventos do LoL...")
 
-  // Canal de admin — recebe comandos remotos (update, etc.)
+  const isUnderPM2 = !!process.env.PM2_HOME
+
+  // ── Presença online ────────────────────────────────────────────────────────
+  const presenceClient = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!)
+  presenceChannel = presenceClient.channel("idv-agent-presence")
+  presenceMeta    = { puuid: myPuuid!, gameName: myGameName!, tagLine: summoner.tagLine }
+
+  presenceChannel.subscribe(async (status) => {
+    if (status === "SUBSCRIBED") {
+      await updatePresence(currentPhase)
+      console.log("[agent] Presença online ativa")
+    }
+  })
+
+  setInterval(() => updatePresence(currentPhase), 60_000)
+
+  // ── Canal de admin ─────────────────────────────────────────────────────────
   const adminClient = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!)
   adminClient
     .channel("idv-agent-admin")
@@ -538,9 +569,15 @@ async function main() {
       console.log("[agent] Update recebido — baixando código novo...")
       try {
         execSync("git pull", { stdio: "inherit", cwd: process.cwd() })
-        execSync("npm install --silent", { stdio: "pipe",  cwd: process.cwd() })
+        execSync("npm install --silent", { stdio: "pipe", cwd: process.cwd() })
         console.log("[agent] Código atualizado! Reiniciando em 3s...")
-        setTimeout(() => process.exit(42), 3_000)
+        setTimeout(() => {
+          if (isUnderPM2) {
+            execSync("pm2 restart idv-lol-agent", { stdio: "inherit" })
+          } else {
+            process.exit(42)
+          }
+        }, 3_000)
       } catch (e) {
         console.error("[agent] Falha ao atualizar:", (e as Error).message)
       }
