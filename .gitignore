@@ -3,4 +3,6 @@ node_modules/
 IDV-LoL-Agent.bat
 idv-lol-agent/
 IDV-Tracker-Installer.zip
+IDV-Tracker-Setup.exe
+IDV-Tracker-Setup.ico
 *.js.map
