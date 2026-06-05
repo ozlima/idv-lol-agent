@@ -1,3 +1,4 @@
 node_modules/
 .env
+IDV-LoL-Agent.bat
 *.js.map
