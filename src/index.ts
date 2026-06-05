@@ -1,5 +1,5 @@
 import { execSync } from "child_process"
-import { copyFileSync, existsSync } from "fs"
+import { copyFileSync, existsSync, readFileSync, writeFileSync } from "fs"
 import { dirname, join } from "path"
 import { createClient, type RealtimeChannel } from "@supabase/supabase-js"
 import { waitForLcu, subscribeToGameflow, getChampSelectSession, getCurrentSummoner, getCurrentRunes, lcuGet } from "./lcu.js"
@@ -551,8 +551,73 @@ function applyCodeUpdate(reason: string, isUnderPM2: boolean): boolean {
   }
 }
 
-function checkForCodeUpdate(isUnderPM2: boolean) {
-  if (codeUpdateInProgress || !isGitCheckout()) return
+function getLocalZipVersion(): string {
+  try {
+    return readFileSync(join(process.cwd(), ".idv-version"), "utf8").trim()
+  } catch {
+    return ""
+  }
+}
+
+async function getRemoteCommitSha(): Promise<string | null> {
+  try {
+    const res = await fetch("https://api.github.com/repos/ozlima/idv-lol-agent/commits/master", {
+      headers: { "User-Agent": "idv-lol-agent" },
+    })
+    if (!res.ok) return null
+    const data = await res.json() as { sha?: string }
+    return data.sha ?? null
+  } catch {
+    return null
+  }
+}
+
+function applyZipCodeUpdate(remoteSha: string, isUnderPM2: boolean): boolean {
+  if (codeUpdateInProgress) return false
+  codeUpdateInProgress = true
+
+  try {
+    console.log("[agent] Update detectado (zip GitHub) - baixando codigo novo...")
+    const appRoot = dirname(process.cwd())
+    const zipPath = join(appRoot, "agent-update.zip")
+    const tmpDir = join(appRoot, "agent-update-src")
+
+    execSync(
+      `powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; ` +
+      `[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; ` +
+      `if (Test-Path '${zipPath}') { Remove-Item -LiteralPath '${zipPath}' -Force }; ` +
+      `if (Test-Path '${tmpDir}') { Remove-Item -LiteralPath '${tmpDir}' -Recurse -Force }; ` +
+      `Invoke-WebRequest 'https://github.com/ozlima/idv-lol-agent/archive/refs/heads/master.zip' -OutFile '${zipPath}'; ` +
+      `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${tmpDir}' -Force; ` +
+      `Copy-Item -Path (Join-Path '${tmpDir}' 'idv-lol-agent-master\\*') -Destination '${process.cwd()}' -Recurse -Force; ` +
+      `Remove-Item -LiteralPath '${zipPath}' -Force; ` +
+      `Remove-Item -LiteralPath '${tmpDir}' -Recurse -Force"`,
+      { stdio: "inherit", cwd: process.cwd() }
+    )
+
+    refreshBootstrapLauncher()
+    writeFileSync(join(process.cwd(), ".idv-version"), `${remoteSha}\n`, "utf8")
+    execSync("npm install --silent", { stdio: "pipe", cwd: process.cwd() })
+    console.log("[agent] Codigo atualizado. Reiniciando em 3s...")
+    restartAgent(isUnderPM2)
+    return true
+  } catch (e) {
+    codeUpdateInProgress = false
+    console.error("[agent] Falha ao atualizar via zip:", (e as Error).message)
+    return false
+  }
+}
+
+async function checkForCodeUpdate(isUnderPM2: boolean) {
+  if (codeUpdateInProgress) return
+
+  if (!isGitCheckout()) {
+    const remoteSha = await getRemoteCommitSha()
+    if (remoteSha && remoteSha !== getLocalZipVersion()) {
+      applyZipCodeUpdate(remoteSha, isUnderPM2)
+    }
+    return
+  }
 
   try {
     const upstream = getUpstreamRef()
@@ -570,8 +635,8 @@ function checkForCodeUpdate(isUnderPM2: boolean) {
 }
 
 function startAutoUpdateChecker(isUnderPM2: boolean) {
-  checkForCodeUpdate(isUnderPM2)
-  setInterval(() => checkForCodeUpdate(isUnderPM2), 5 * 60_000)
+  void checkForCodeUpdate(isUnderPM2)
+  setInterval(() => void checkForCodeUpdate(isUnderPM2), 5 * 60_000)
   console.log("[agent] Auto-update ativo (GitHub a cada 5min)")
 }
 

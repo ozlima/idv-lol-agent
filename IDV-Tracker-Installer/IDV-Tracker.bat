@@ -3,7 +3,7 @@ setlocal
 
 set "SUPABASE_URL=https://tninlfmhruccphpncahs.supabase.co"
 set "SUPABASE_ANON_KEY=sb_publishable_ILxcIFs_94-MnEc-AuDVVg_i8P0Eb1D"
-set "REPO_URL=https://github.com/ozlima/idv-lol-agent.git"
+set "REPO_ZIP=https://github.com/ozlima/idv-lol-agent/archive/refs/heads/master.zip"
 
 set "BOOT_DIR=%~dp0"
 set "APP_ROOT=%LOCALAPPDATA%\IDV Tracker"
@@ -11,6 +11,9 @@ set "DIR=%APP_ROOT%\idv-lol-agent"
 set "BOOTSTRAP=%APP_ROOT%\IDV-Tracker.bat"
 set "INSTALLER=%BOOT_DIR%installer.ps1"
 set "ICON_PATH=%BOOT_DIR%icon.png"
+set "NODE_DIR=%APP_ROOT%\runtime\node-v20.11.1-win-x64"
+
+if exist "%NODE_DIR%\node.exe" set "PATH=%NODE_DIR%;%PATH%"
 
 if /I "%~1"=="--run" goto runAgent
 
@@ -33,19 +36,12 @@ if exist "%DIR%\.installed" (
 
 where node >nul 2>&1
 if errorlevel 1 (
-    powershell -NoProfile -Command "& {Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Node.js nao encontrado. Instale em https://nodejs.org e tente novamente.', 'IDV Tracker', 'OK', 'Error')}"
+    powershell -NoProfile -Command "& {Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Node.js portatil nao encontrado. Rode o IDV-Tracker-Setup.cmd novamente.', 'IDV Tracker', 'OK', 'Error')}"
     exit /b 1
 )
 
-where git >nul 2>&1
-if errorlevel 1 (
-    powershell -NoProfile -Command "& {Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Git nao encontrado. Instale em https://git-scm.com/download/win e tente novamente.', 'IDV Tracker', 'OK', 'Error')}"
-    exit /b 1
-)
-
-if not exist "%DIR%\.git" (
-    if not exist "%APP_ROOT%" mkdir "%APP_ROOT%" >nul 2>&1
-    git clone "%REPO_URL%" "%DIR%" --quiet
+if not exist "%DIR%\package.json" (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $zip=Join-Path '%APP_ROOT%' 'agent.zip'; $tmp=Join-Path '%APP_ROOT%' 'agent-src'; if (Test-Path $zip) { Remove-Item -LiteralPath $zip -Force }; if (Test-Path $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }; if (Test-Path '%DIR%') { Remove-Item -LiteralPath '%DIR%' -Recurse -Force }; Invoke-WebRequest '%REPO_ZIP%' -OutFile $zip; Expand-Archive -LiteralPath $zip -DestinationPath $tmp -Force; New-Item -ItemType Directory -Path '%DIR%' -Force | Out-Null; Copy-Item -LiteralPath (Join-Path $tmp 'idv-lol-agent-master\*') -Destination '%DIR%' -Recurse -Force; $commit=(Invoke-RestMethod 'https://api.github.com/repos/ozlima/idv-lol-agent/commits/master').sha; Set-Content -LiteralPath (Join-Path '%DIR%' '.idv-version') -Value $commit -Encoding UTF8; Remove-Item -LiteralPath $zip -Force; Remove-Item -LiteralPath $tmp -Recurse -Force"
     if errorlevel 1 (
         powershell -NoProfile -Command "& {Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Erro ao baixar o IDV Tracker. Verifique sua conexao com a internet.', 'IDV Tracker', 'OK', 'Error')}"
         exit /b 1
@@ -58,6 +54,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%INSTALLER%"
 exit /b
 
 :runAgent
+if exist "%NODE_DIR%\node.exe" set "PATH=%NODE_DIR%;%PATH%"
 cd /d "%DIR%"
 :agentLoop
 call npm run dev >> agent.log 2>&1

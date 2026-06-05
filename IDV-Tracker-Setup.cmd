@@ -5,6 +5,11 @@ color 0A
 
 set "APP_ROOT=%LOCALAPPDATA%\IDV Tracker"
 set "SETUP_DIR=%APP_ROOT%\setup"
+set "RUNTIME_DIR=%APP_ROOT%\runtime"
+set "NODE_VERSION=20.11.1"
+set "NODE_DIR=%RUNTIME_DIR%\node-v%NODE_VERSION%-win-x64"
+set "NODE_ZIP=%RUNTIME_DIR%\node.zip"
+set "NODE_URL=https://nodejs.org/dist/v%NODE_VERSION%/node-v%NODE_VERSION%-win-x64.zip"
 set "REPO_RAW=https://raw.githubusercontent.com/ozlima/idv-lol-agent/master"
 set "BOOTSTRAP=%SETUP_DIR%\IDV-Tracker.bat"
 set "INSTALLER=%SETUP_DIR%\installer.ps1"
@@ -13,6 +18,7 @@ set "SETUP_LOG=%SETUP_DIR%\setup.log"
 set "AGENT_LOG=%APP_ROOT%\idv-lol-agent\agent.log"
 
 if not exist "%SETUP_DIR%" mkdir "%SETUP_DIR%" >nul 2>&1
+if not exist "%RUNTIME_DIR%" mkdir "%RUNTIME_DIR%" >nul 2>&1
 
 call :log "========================================"
 call :log "IDV Tracker Setup"
@@ -20,19 +26,23 @@ call :log "Pasta: %APP_ROOT%"
 call :log "Log: %SETUP_LOG%"
 call :log "========================================"
 
-call :log "Verificando Node.js..."
-where node >nul 2>&1
-if errorlevel 1 (
-    call :fail "Node.js nao encontrado. Instale em https://nodejs.org e rode este setup de novo."
-    exit /b 1
+call :log "Preparando Node.js portatil..."
+if not exist "%NODE_DIR%\node.exe" (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+      "$ErrorActionPreference='Stop';" ^
+      "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;" ^
+      "Invoke-WebRequest '%NODE_URL%' -OutFile '%NODE_ZIP%';" ^
+      "if (Test-Path '%NODE_DIR%') { Remove-Item -LiteralPath '%NODE_DIR%' -Recurse -Force };" ^
+      "Expand-Archive -LiteralPath '%NODE_ZIP%' -DestinationPath '%RUNTIME_DIR%' -Force;" ^
+      "Remove-Item -LiteralPath '%NODE_ZIP%' -Force;" >> "%SETUP_LOG%" 2>&1
+    if errorlevel 1 (
+        call :fail "Erro ao baixar/preparar Node.js portatil. Confira a internet e mande o setup.log."
+        exit /b 1
+    )
 )
 
-call :log "Verificando Git..."
-where git >nul 2>&1
-if errorlevel 1 (
-    call :fail "Git nao encontrado. Instale em https://git-scm.com/download/win e rode este setup de novo."
-    exit /b 1
-)
+set "PATH=%NODE_DIR%;%PATH%"
+call :log "Node.js pronto: %NODE_DIR%"
 
 call :log "Baixando arquivos do instalador..."
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
