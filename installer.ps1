@@ -204,7 +204,7 @@ $ps.Runspace = $rs
     $vbs  = $sync.StartupVbs
     $d    = $sync.Dispatcher
 
-    function Ui([scriptblock]$sb) { $d.BeginInvoke([Action]$sb) | Out-Null }
+    function Ui([scriptblock]$sb) { $d.Invoke([System.Action]$sb) }
 
     Start-Sleep -Milliseconds 600  # mostra o estado "instalando" brevemente
 
@@ -257,6 +257,6 @@ $BtnOk.Add_Click({
 })
 $BtnError.Add_Click({ $window.Close() })
 
-[void]$window.ShowDialog()
-$ps.Stop()
-$rs.Close()
+$app = New-Object System.Windows.Application
+$app.Add_Exit({ $ps.Stop(); $rs.Close() })
+[void]$app.Run($window)
