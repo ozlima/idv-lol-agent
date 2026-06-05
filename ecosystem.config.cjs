@@ -15,22 +15,19 @@ function parseEnv(file) {
   } catch { return {} }
 }
 
-// tsx.cmd é o executável correto para PM2 no Windows
-const tsxBin = path.join(__dirname, "node_modules", ".bin", "tsx.cmd")
-
 module.exports = {
   apps: [
     {
-      name:          "idv-lol-agent",
-      script:        tsxBin,
-      args:          "src/index.ts",
-      cwd:           __dirname,
-      interpreter:   "none",
-      watch:         false,
-      autorestart:   true,
-      restart_delay: 5000,
-      max_restarts:  20,
-      min_uptime:    "5s",
+      name:             "idv-lol-agent",
+      script:           "src/index.ts",
+      interpreter:      "node",
+      interpreter_args: "--import tsx",
+      cwd:              __dirname,
+      watch:            false,
+      autorestart:      true,
+      restart_delay:    5000,
+      max_restarts:     20,
+      min_uptime:       "5s",
       env: {
         NODE_ENV: "production",
         ...parseEnv(path.join(__dirname, ".env")),
