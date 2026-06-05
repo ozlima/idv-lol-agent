@@ -24,12 +24,14 @@ call :log "Verificando Node.js..."
 where node >nul 2>&1
 if errorlevel 1 (
     call :fail "Node.js nao encontrado. Instale em https://nodejs.org e rode este setup de novo."
+    exit /b 1
 )
 
 call :log "Verificando Git..."
 where git >nul 2>&1
 if errorlevel 1 (
     call :fail "Git nao encontrado. Instale em https://git-scm.com/download/win e rode este setup de novo."
+    exit /b 1
 )
 
 call :log "Baixando arquivos do instalador..."
@@ -41,12 +43,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "Invoke-WebRequest '%REPO_RAW%/IDV-Tracker-Installer/icon.png' -OutFile '%ICON%';" >> "%SETUP_LOG%" 2>&1
 if errorlevel 1 (
     call :fail "Erro ao baixar arquivos do GitHub. Confira a internet e mande o setup.log."
+    exit /b 1
 )
 
 call :log "Iniciando instalador visual..."
 call "%BOOTSTRAP%" >> "%SETUP_LOG%" 2>&1
 if errorlevel 1 (
     call :fail "O instalador retornou erro. Mande o setup.log."
+    exit /b 1
 )
 
 call :log "Setup finalizado."
