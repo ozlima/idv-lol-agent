@@ -15,7 +15,7 @@ Add-Type -AssemblyName WindowsBase
 [xml]$XAML = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="IDV Tracker" Width="400" Height="480"
+        Title="IDV Tracker" Width="440" Height="520"
         WindowStartupLocation="CenterScreen"
         ResizeMode="NoResize" WindowStyle="None"
         Background="#0A0C14"
@@ -45,7 +45,7 @@ Add-Type -AssemblyName WindowsBase
 
       <!-- content -->
       <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center"
-                  Width="300" Margin="0,-16,0,0">
+                  Width="340" Margin="0,-18,0,0">
 
         <!-- icon with cyan glow -->
         <Border HorizontalAlignment="Center" Margin="0,0,0,24">
@@ -53,28 +53,31 @@ Add-Type -AssemblyName WindowsBase
             <DropShadowEffect Color="#22D3EE" BlurRadius="28"
                               ShadowDepth="0" Opacity="0.45"/>
           </Border.Effect>
-          <Image x:Name="ImgIcon" Height="88" Width="88"
+          <Image x:Name="ImgIcon" Height="96" Width="96"
                  RenderOptions.BitmapScalingMode="HighQuality"/>
         </Border>
 
         <!-- title -->
         <TextBlock Text="IDV Tracker"
-                   FontSize="26" FontWeight="Bold" Foreground="#E2E8F0"
+                   FontSize="28" FontWeight="Bold" Foreground="#E2E8F0"
                    HorizontalAlignment="Center" Margin="0,0,0,6"
                    FontFamily="Segoe UI"/>
 
         <!-- tagline -->
         <TextBlock Text="MONITOR DE PARTIDAS"
-                   FontSize="10" Foreground="#1C2E4A"
-                   HorizontalAlignment="Center" Margin="0,0,0,44"
+                   FontSize="10" Foreground="#3C537A"
+                   HorizontalAlignment="Center" Margin="0,0,0,34"
                    FontFamily="Segoe UI"/>
 
         <!-- installing -->
         <StackPanel x:Name="PanelInstalling">
-          <TextBlock Text="Instalando IDV Tracker"
-                     FontSize="12" Foreground="#33496A"
-                     HorizontalAlignment="Center" Margin="0,0,0,16"
-                     FontFamily="Segoe UI"/>
+          <TextBlock x:Name="TxtInstallStatus"
+                     Text="&#x1F6E0; Instalando o IDV Tracker"
+                     FontSize="14" Foreground="#A8D8FF"
+                     HorizontalAlignment="Center" TextAlignment="Center"
+                     TextWrapping="Wrap" MaxWidth="320"
+                     Margin="0,0,0,18"
+                     FontFamily="Segoe UI Emoji, Segoe UI"/>
           <Border Height="3" CornerRadius="2" Background="#0D1423">
             <ProgressBar Height="3" IsIndeterminate="True"
                          Background="Transparent" BorderThickness="0">
@@ -91,8 +94,9 @@ Add-Type -AssemblyName WindowsBase
         <!-- done -->
         <StackPanel x:Name="PanelDone" Visibility="Collapsed"
                     HorizontalAlignment="Center">
-          <TextBlock Text="&#x2713;  Pronto!" FontSize="13" Foreground="#4ADE80"
+          <TextBlock Text="&#x2713;  Pronto! O IDV Tracker j&#x00E1; est&#x00E1; rodando." FontSize="13" Foreground="#4ADE80"
                      HorizontalAlignment="Center" Margin="0,0,0,28"
+                     TextAlignment="Center" TextWrapping="Wrap" MaxWidth="300"
                      FontFamily="Segoe UI"/>
           <Button x:Name="BtnOk" Content="OK"
                   Width="160" Height="44" Cursor="Hand" BorderThickness="0"
@@ -160,6 +164,7 @@ $PanelError      = $window.FindName("PanelError")
 $BtnOk           = $window.FindName("BtnOk")
 $BtnError        = $window.FindName("BtnError")
 $TxtError        = $window.FindName("TxtError")
+$TxtInstallStatus = $window.FindName("TxtInstallStatus")
 
 # ── Icon ──────────────────────────────────────────────────────────────────────
 if ($IconPath -and (Test-Path $IconPath)) {
@@ -176,6 +181,25 @@ if ($IconPath -and (Test-Path $IconPath)) {
 $window.Add_MouseLeftButtonDown({ $window.DragMove() })
 $BtnClose.Add_Click({ $window.Close() })
 
+$emojiInstall = [char]::ConvertFromUtf32(0x1F6E0)
+$emojiRank = [char]::ConvertFromUtf32(0x1F4C9)
+$emojiKeyboard = [char]::ConvertFromUtf32(0x2328)
+$emojiSecret = [char]::ConvertFromUtf32(0x1F92B)
+$installMessages = @(
+    "$emojiInstall Instalando o IDV Tracker",
+    "$emojiRank Verificando se o Hug$([char]0x00E3)o j$([char]0x00E1) dropou de elo hj...",
+    "$emojiKeyboard Tentando concertar o teclado quebrado do Ar3s...",
+    "$emojiSecret Ajustando benga pro lume mamar no sigilo..."
+)
+$messageIndex = 0
+$messageTimer = New-Object Windows.Threading.DispatcherTimer
+$messageTimer.Interval = [TimeSpan]::FromMilliseconds(2200)
+$messageTimer.Add_Tick({
+    $script:messageIndex = ($script:messageIndex + 1) % $installMessages.Count
+    $TxtInstallStatus.Text = $installMessages[$script:messageIndex]
+})
+$messageTimer.Start()
+
 # ── Cross-thread sync ─────────────────────────────────────────────────────────
 $sync = [hashtable]::Synchronized(@{
     TargetDir       = $TargetDir
@@ -188,6 +212,7 @@ $sync = [hashtable]::Synchronized(@{
     PanelDone       = $PanelDone
     PanelError      = $PanelError
     TxtError        = $TxtError
+    StatusTimer     = $messageTimer
 })
 
 # ── Background install ────────────────────────────────────────────────────────
@@ -246,7 +271,7 @@ $ps.Runspace = $rs
             $bat = [System.IO.Path]::GetFullPath((Join-Path $dir "..\IDV-Tracker.bat"))
             if (Test-Path $bat) {
                 $vbsText  = "Set o = CreateObject(`"WScript.Shell`")`r`n"
-                $vbsText += "o.Run Chr(34) & `"$bat`" & Chr(34), 1, False"
+                $vbsText += "o.Run Chr(34) & `"$bat`" & Chr(34), 0, False"
                 Set-Content -Path $vbs -Value $vbsText -Encoding ASCII
             }
         }
@@ -257,10 +282,12 @@ $ps.Runspace = $rs
         # inicia o agent imediatamente apos instalar
         $bat = [System.IO.Path]::GetFullPath((Join-Path $dir "..\IDV-Tracker.bat"))
         if (Test-Path $bat) {
-            Start-Process "cmd" -ArgumentList "/c `"$bat`"" -WindowStyle Minimized
+            $shell = New-Object -ComObject WScript.Shell
+            [void]$shell.Run("`"$bat`"", 0, $false)
         }
 
         Ui {
+            $sync.StatusTimer.Stop()
             $sync.PanelInstalling.Visibility = [System.Windows.Visibility]::Collapsed
             $sync.PanelDone.Visibility       = [System.Windows.Visibility]::Visible
         }
@@ -273,6 +300,7 @@ $ps.Runspace = $rs
             } catch {}
         }
         Ui {
+            $sync.StatusTimer.Stop()
             $sync.PanelInstalling.Visibility = [System.Windows.Visibility]::Collapsed
             $sync.TxtError.Text              = $msg
             $sync.PanelError.Visibility      = [System.Windows.Visibility]::Visible

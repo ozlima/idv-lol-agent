@@ -3,6 +3,9 @@ setlocal EnableExtensions
 title IDV Tracker Setup
 color 0A
 
+set "IDV_SILENT=0"
+if /I "%~1"=="--silent" set "IDV_SILENT=1"
+
 set "APP_ROOT=%LOCALAPPDATA%\IDV Tracker"
 set "SETUP_DIR=%APP_ROOT%\setup"
 set "RUNTIME_DIR=%APP_ROOT%\runtime"
@@ -67,6 +70,7 @@ if errorlevel 1 (
 )
 
 call :log "Setup finalizado."
+if "%IDV_SILENT%"=="1" exit /b 0
 echo.
 if exist "%AGENT_LOG%" (
     echo Ultimas linhas do agent.log:
@@ -105,6 +109,7 @@ exit /b 0
 
 :fail
 call :log "ERRO: %~1"
+if "%IDV_SILENT%"=="1" exit /b 1
 echo.
 echo ERRO: %~1
 echo.
