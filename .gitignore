@@ -5,3 +5,7 @@ idv-lol-agent/
 IDV-Tracker-Installer.zip
 IDV-Tracker-Setup.exe
 *.js.map
+certs/*.pfx
+certs/*.p12
+certs/*.pvk
+certs/*.key
