@@ -273,13 +273,15 @@ $ps.Runspace = $rs
             -Value "SUPABASE_URL=$url`r`nSUPABASE_ANON_KEY=$key" -Encoding UTF8
 
         # startup VBS (iniciar com o Windows)
-        if (-not (Test-Path $vbs)) {
-            $bat = [System.IO.Path]::GetFullPath((Join-Path $dir "..\IDV-Tracker.bat"))
-            if (Test-Path $bat) {
-                $vbsText  = "Set o = CreateObject(`"WScript.Shell`")`r`n"
-                $vbsText += "o.Run Chr(34) & `"$bat`" & Chr(34), 0, False"
-                Set-Content -Path $vbs -Value $vbsText -Encoding ASCII
+        $bat = [System.IO.Path]::GetFullPath((Join-Path $dir "..\IDV-Tracker.bat"))
+        if (Test-Path $bat) {
+            $startupDir = Split-Path -Parent $vbs
+            if (-not (Test-Path $startupDir)) {
+                New-Item -ItemType Directory -Path $startupDir -Force | Out-Null
             }
+            $vbsText  = "Set o = CreateObject(`"WScript.Shell`")`r`n"
+            $vbsText += "o.Run Chr(34) & `"$bat`" & Chr(34), 0, False"
+            Set-Content -Path $vbs -Value $vbsText -Encoding ASCII
         }
 
         # marca como instalado
