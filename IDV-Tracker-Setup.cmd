@@ -45,7 +45,10 @@ set "ICON=%SETUP_DIR%\icon.png"
 set "SETUP_LOG=%SETUP_DIR%\setup.log"
 set "INSTALL_LOG=%APP_ROOT%\idv-lol-agent\install.log"
 set "AGENT_LOG=%APP_ROOT%\idv-lol-agent\agent.log"
+set "STARTUP_VBS=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\IDV-LoL-Agent.vbs"
+set "CLEANUP_LOG=%TEMP%\IDV-Tracker-cleanup.log"
 
+call :cleanupPreviousInstall
 if not exist "%SETUP_DIR%" mkdir "%SETUP_DIR%" >nul 2>&1
 if not exist "%RUNTIME_DIR%" mkdir "%RUNTIME_DIR%" >nul 2>&1
 
@@ -54,6 +57,7 @@ call :log "IDV Tracker Setup"
 call :log "Pasta: %APP_ROOT%"
 call :log "Log: %SETUP_LOG%"
 call :log "========================================"
+if exist "%CLEANUP_LOG%" type "%CLEANUP_LOG%" >> "%SETUP_LOG%"
 
 call :log "Preparando Node.js portatil..."
 if not exist "%NODE_DIR%\node.exe" (
@@ -128,6 +132,14 @@ echo.
 pause
 exit /b 0
 
+:cleanupPreviousInstall
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $appRoot=[System.IO.Path]::GetFullPath($env:APP_ROOT); $local=[System.IO.Path]::GetFullPath($env:LOCALAPPDATA); $startup=$env:STARTUP_VBS; $cleanupLog=$env:CLEANUP_LOG; Set-Content -LiteralPath $cleanupLog -Value ('[' + (Get-Date).ToString('dd/MM/yyyy HH:mm:ss') + '] Limpando instalacao anterior: ' + $appRoot) -Encoding UTF8; if (-not $appRoot.StartsWith($local, [System.StringComparison]::OrdinalIgnoreCase)) { throw ('Caminho inseguro: ' + $appRoot) }; $current=$PID; $targets=@(Get-CimInstance Win32_Process); foreach ($p in $targets) { if ($p.ProcessId -ne $current -and $p.CommandLine -and $p.CommandLine.Contains($appRoot)) { Add-Content -LiteralPath $cleanupLog -Value ('Encerrando processo antigo: ' + $p.ProcessId + ' ' + $p.Name) -Encoding UTF8; try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop } catch { Add-Content -LiteralPath $cleanupLog -Value ('Falha ao encerrar processo antigo: ' + $p.ProcessId) -Encoding UTF8 } } }; if (Test-Path -LiteralPath $startup) { Add-Content -LiteralPath $cleanupLog -Value ('Removendo startup antigo: ' + $startup) -Encoding UTF8; Remove-Item -LiteralPath $startup -Force -ErrorAction SilentlyContinue }; if (Test-Path -LiteralPath $appRoot) { Add-Content -LiteralPath $cleanupLog -Value ('Removendo pasta antiga: ' + $appRoot) -Encoding UTF8; Remove-Item -LiteralPath $appRoot -Recurse -Force }; Add-Content -LiteralPath $cleanupLog -Value ('[' + (Get-Date).ToString('dd/MM/yyyy HH:mm:ss') + '] Limpeza concluida') -Encoding UTF8;"
+if errorlevel 1 (
+    if not exist "%SETUP_DIR%" mkdir "%SETUP_DIR%" >nul 2>&1
+    call :fail "Erro ao limpar instalacao anterior. Reinicie o Windows e tente de novo."
+    exit /b 1
+)
+exit /b 0
 :log
 if "%IDV_DEBUG%"=="1" echo [%date% %time%] %~1
 >> "%SETUP_LOG%" echo [%date% %time%] %~1
