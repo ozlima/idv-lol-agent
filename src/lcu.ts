@@ -21,6 +21,7 @@ export async function waitForLcu(): Promise<void> {
 
 export async function subscribeToGameflow(
   onPhaseChange: (phase: string) => void,
+  onDisconnect?: () => void,
 ): Promise<void> {
   const creds = await getLcuCredentials()
   const ws = await connect(creds)
@@ -32,7 +33,8 @@ export async function subscribeToGameflow(
   ws.on("close", () => {
     console.log("[lcu] WebSocket desconectado — reconectando em 5s...")
     credentials = null
-    setTimeout(() => subscribeToGameflow(onPhaseChange), 5_000)
+    onDisconnect?.()
+    setTimeout(() => subscribeToGameflow(onPhaseChange, onDisconnect), 5_000)
   })
 }
 

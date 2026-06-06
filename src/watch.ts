@@ -334,7 +334,9 @@ function printOnlineStatus() {
   console.log(`\n${B}🟢 Agents online (${onlineUsers.size}):${R}`)
   for (const [puuid, u] of onlineUsers) {
     const name  = u.gameName ? `${CYAN}${B}${u.gameName}#${u.tagLine}${R}` : `${GRAY}${puuid.slice(0, 8)}...${R}`
-    const phase = u.phase !== "None" && u.phase !== "Lobby" ? ` ${YELLOW}[${u.phase}]${R}` : ""
+    const phase = u.phase === "LoLClosed"
+      ? ` ${RED}[LoL fechado]${R}`
+      : u.phase !== "None" && u.phase !== "Lobby" ? ` ${YELLOW}[${u.phase}]${R}` : ""
     console.log(`  ${name}${phase}`)
   }
   console.log()
@@ -379,8 +381,18 @@ function syncPresenceState(logChanges = false) {
       offlineTimers.delete(puuid)
     }
 
-    const wasOnline = onlineUsers.has(puuid)
+    const previous = onlineUsers.get(puuid)
+    const wasOnline = !!previous
     onlineUsers.set(puuid, user)
+
+    if (logChanges && wasOnline && previous?.phase !== user.phase) {
+      const name = user.gameName ? `${CYAN}${B}${user.gameName}#${user.tagLine}${R}` : puuid.slice(0, 8)
+      if (user.phase === "LoLClosed") {
+        console.log(`\n${ts()} 🔌 ${RED}League Client fechado:${R} ${name} ${GRAY}(agent ainda online)${R}\n`)
+      } else if (previous?.phase === "LoLClosed") {
+        console.log(`\n${ts()} 🔁 ${GREEN}League Client voltou:${R} ${name} ${YELLOW}[${user.phase}]${R}\n`)
+      }
+    }
 
     if (logChanges && !wasOnline) {
       const name = user.gameName ? `${CYAN}${B}${user.gameName}#${user.tagLine}${R}` : puuid.slice(0, 8)

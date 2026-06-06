@@ -58,7 +58,7 @@ function calcNetWorth(items: Array<{ itemID: number }>): Promise<number> {
 type GamePhase =
   | "None" | "Lobby" | "Matchmaking" | "ReadyCheck"
   | "ChampSelect" | "GameStart" | "InProgress"
-  | "WaitingForStats" | "PreEndOfGame" | "EndOfGame" | "TerminatedInError"
+  | "WaitingForStats" | "PreEndOfGame" | "EndOfGame" | "TerminatedInError" | "LoLClosed"
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -640,6 +640,17 @@ function startAutoUpdateChecker(isUnderPM2: boolean) {
   console.log("[agent] Auto-update ativo (GitHub a cada 5min)")
 }
 
+async function markLeagueClientClosed() {
+  if (currentPhase === "LoLClosed") return
+  const prev = currentPhase
+  currentPhase = "LoLClosed"
+  stopChampSelectPolling()
+  stopGameTracking()
+  champSelectSent = false
+  lastHoverChampId = 0
+  console.log(`[agent] League Client desconectado: ${prev} -> LoLClosed`)
+  await updatePresence("LoLClosed")
+}
 async function onPhaseChange(phase: string) {
   if (phase === currentPhase) return
   const prev = currentPhase
@@ -706,7 +717,7 @@ async function main() {
     console.error("[agent] Erro ao processar fase inicial:", e)
   }
 
-  await subscribeToGameflow(onPhaseChange)
+  await subscribeToGameflow(onPhaseChange, () => void markLeagueClientClosed())
   console.log("[agent] Aguardando eventos do LoL...")
 
   // ── Presença online ────────────────────────────────────────────────────────
