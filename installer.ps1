@@ -172,7 +172,7 @@ $BtnError        = $window.FindName("BtnError")
 $TxtError        = $window.FindName("TxtError")
 $TxtInstallStatus = $window.FindName("TxtInstallStatus")
 
-# ── Icon ──────────────────────────────────────────────────────────────────────
+# Icon
 if ($IconPath -and (Test-Path $IconPath)) {
     $bmp = New-Object Windows.Media.Imaging.BitmapImage
     $bmp.BeginInit()
@@ -183,9 +183,9 @@ if ($IconPath -and (Test-Path $IconPath)) {
     $window.Icon    = $bmp
 }
 
-# ── Drag / close ──────────────────────────────────────────────────────────────
+# Drag / close
 $window.Add_MouseLeftButtonDown({ $window.DragMove() })
-$BtnClose.Add_Click({ $window.Close() })
+$BtnClose.Add_Click({ if ($sync.InstallFinished) { $window.Close() } })
 
 $emojiInstall = [char]::ConvertFromUtf32(0x1F6E0)
 $emojiRank = [char]::ConvertFromUtf32(0x1F4C9)
@@ -206,7 +206,7 @@ $messageTimer.Add_Tick({
 })
 $messageTimer.Start()
 
-# ── Cross-thread sync ─────────────────────────────────────────────────────────
+# Cross-thread sync
 $sync = [hashtable]::Synchronized(@{
     TargetDir       = $TargetDir
     SupaUrl         = $SupaUrl
@@ -219,9 +219,10 @@ $sync = [hashtable]::Synchronized(@{
     PanelError      = $PanelError
     TxtError        = $TxtError
     StatusTimer     = $messageTimer
+    InstallFinished = $false
 })
 
-# ── Background install ────────────────────────────────────────────────────────
+# Background install
 $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
 $rs.ApartmentState = "STA"
 $rs.ThreadOptions  = "ReuseThread"
@@ -252,6 +253,16 @@ $ps.Runspace = $rs
         "npm: $(& npm.cmd -v 2>&1)" | Add-Content -Path $installLog -Encoding UTF8
         "" | Add-Content -Path $installLog -Encoding UTF8
 
+        function LogStep([string]$text) {
+            $stamp = Get-Date -Format "dd/MM/yyyy HH:mm:ss"
+            $line = "[$stamp] $text"
+            Add-Content -Path $installLog -Value $line -Encoding UTF8
+            if ($setupLog) {
+                try { Add-Content -Path $setupLog -Value "[installer] $text" -Encoding UTF8 } catch {}
+            }
+        }
+
+        LogStep "Iniciando npm install"
         Push-Location $dir
         try {
             & npm.cmd install --no-audit --no-fund *>> $installLog
@@ -260,6 +271,7 @@ $ps.Runspace = $rs
             Pop-Location
         }
 
+        LogStep "npm install terminou com codigo $exitCode"
         if ($exitCode -ne 0) {
             $tail = ""
             if (Test-Path $installLog) {
@@ -269,39 +281,50 @@ $ps.Runspace = $rs
         }
 
         # .env
-        Set-Content -Path (Join-Path $dir ".env") `
+        $envPath = Join-Path $dir ".env"
+        Set-Content -Path $envPath `
             -Value "SUPABASE_URL=$url`r`nSUPABASE_ANON_KEY=$key" -Encoding UTF8
+        LogStep ".env atualizado"
 
         # startup VBS (iniciar com o Windows)
         $bat = [System.IO.Path]::GetFullPath((Join-Path $dir "..\IDV-Tracker.bat"))
-        if (Test-Path $bat) {
-            $startupDir = Split-Path -Parent $vbs
-            if (-not (Test-Path $startupDir)) {
-                New-Item -ItemType Directory -Path $startupDir -Force | Out-Null
-            }
-            $vbsText  = "Set o = CreateObject(`"WScript.Shell`")`r`n"
-            $vbsText += "o.Run Chr(34) & `"$bat`" & Chr(34), 0, False"
-            Set-Content -Path $vbs -Value $vbsText -Encoding ASCII
+        if (-not (Test-Path $bat)) {
+            throw "Launcher nao encontrado: $bat"
         }
 
+        $startupDir = Split-Path -Parent $vbs
+        if (-not (Test-Path $startupDir)) {
+            New-Item -ItemType Directory -Path $startupDir -Force | Out-Null
+        }
+        $vbsText  = "Set o = CreateObject(`"WScript.Shell`")`r`n"
+        $vbsText += "o.Run Chr(34) & `"$bat`" & Chr(34), 0, False"
+        Set-Content -Path $vbs -Value $vbsText -Encoding ASCII
+        LogStep "Startup configurado: $vbs"
+
         # marca como instalado
-        Set-Content -Path (Join-Path $dir ".installed") -Value "" -Encoding ASCII
+        $installedMarker = Join-Path $dir ".installed"
+        New-Item -ItemType File -Path $installedMarker -Force | Out-Null
+        if (-not (Test-Path -LiteralPath $installedMarker)) {
+            throw "Marcador de instalacao nao foi criado: $installedMarker"
+        }
+        LogStep "Marcador .installed criado"
 
         # inicia o agent imediatamente apos instalar
-        $bat = [System.IO.Path]::GetFullPath((Join-Path $dir "..\IDV-Tracker.bat"))
-        if (Test-Path $bat) {
-            $running = Get-CimInstance Win32_Process | Where-Object {
-                $_.CommandLine -and
-                $_.CommandLine.Contains($dir) -and
-                ($_.Name -eq "node.exe" -or $_.Name -eq "cmd.exe" -or $_.Name -eq "npm.cmd")
-            }
-            if (-not $running) {
-                $shell = New-Object -ComObject WScript.Shell
-                [void]$shell.Run("`"$bat`"", 0, $false)
-            }
+        $running = Get-CimInstance Win32_Process | Where-Object {
+            $_.CommandLine -and
+            $_.CommandLine.Contains($dir) -and
+            ($_.Name -eq "node.exe" -or $_.Name -eq "cmd.exe" -or $_.Name -eq "npm.cmd")
+        }
+        if ($running) {
+            LogStep "Agent ja estava rodando"
+        } else {
+            $shell = New-Object -ComObject WScript.Shell
+            [void]$shell.Run("`"$bat`" --run", 0, $false)
+            LogStep "Agent iniciado via launcher --run"
         }
 
         Ui {
+            $sync.InstallFinished = $true
             $sync.StatusTimer.Stop()
             $sync.PanelInstalling.Visibility = [System.Windows.Visibility]::Collapsed
             $sync.PanelDone.Visibility       = [System.Windows.Visibility]::Visible
@@ -315,6 +338,7 @@ $ps.Runspace = $rs
             } catch {}
         }
         Ui {
+            $sync.InstallFinished = $true
             $sync.StatusTimer.Stop()
             $sync.PanelInstalling.Visibility = [System.Windows.Visibility]::Collapsed
             $sync.TxtError.Text              = $msg
@@ -324,7 +348,7 @@ $ps.Runspace = $rs
 })
 [void]$ps.BeginInvoke()
 
-# ── Buttons ───────────────────────────────────────────────────────────────────
+# Buttons
 $BtnOk.Add_Click({
     $window.Close()
 })
