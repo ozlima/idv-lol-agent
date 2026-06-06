@@ -14,7 +14,7 @@ goto parseArgs
 
 :argsDone
 if "%IDV_DEBUG%"=="0" if "%IDV_INNER%"=="0" (
-    powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "$p='%~f0'; Start-Process -FilePath 'cmd.exe' -ArgumentList ('/c ""' + $p + '"" --inner') -WindowStyle Hidden"
+    powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "$p='%~f0'; Start-Process -FilePath $p -ArgumentList '--inner' -WindowStyle Hidden"
     exit /b
 )
 
