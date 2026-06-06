@@ -324,6 +324,7 @@ interface PresenceState {
 }
 
 const onlineUsers = new Map<string, PresenceState>()  // keyed by puuid
+const offlineTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 function printOnlineStatus() {
   if (onlineUsers.size === 0) {
@@ -362,35 +363,60 @@ console.log(`${DIM}⚡ Flash: [1-5] marcar uso  [f] ver status  [p] agents onlin
 // Presença — quem está rodando o agent agora
 const presenceChan = supabase.channel("idv-agent-presence")
 
-function syncPresenceState() {
+function syncPresenceState(logChanges = false) {
   const state = presenceChan.presenceState<PresenceState & { puuid: string }>()
-  onlineUsers.clear()
+  const nextUsers = new Map<string, PresenceState>()
+
   for (const presences of Object.values(state)) {
-    const p = presences[0]
-    if (p?.puuid) onlineUsers.set(p.puuid, { gameName: p.gameName, tagLine: p.tagLine, phase: p.phase, since: p.since })
+    const p = presences[presences.length - 1]
+    if (p?.puuid) nextUsers.set(p.puuid, { gameName: p.gameName, tagLine: p.tagLine, phase: p.phase, since: p.since })
+  }
+
+  for (const [puuid, user] of nextUsers) {
+    const timer = offlineTimers.get(puuid)
+    if (timer) {
+      clearTimeout(timer)
+      offlineTimers.delete(puuid)
+    }
+
+    const wasOnline = onlineUsers.has(puuid)
+    onlineUsers.set(puuid, user)
+
+    if (logChanges && !wasOnline) {
+      const name = user.gameName ? `${CYAN}${B}${user.gameName}#${user.tagLine}${R}` : puuid.slice(0, 8)
+      console.log(`\n${ts()} 🟢 ${GREEN}Agent online:${R} ${name}\n`)
+    }
+  }
+
+  for (const [puuid, user] of onlineUsers) {
+    if (nextUsers.has(puuid) || offlineTimers.has(puuid)) continue
+
+    const timer = setTimeout(() => {
+      offlineTimers.delete(puuid)
+      if (!onlineUsers.has(puuid)) return
+
+      const currentState = presenceChan.presenceState<PresenceState & { puuid: string }>()
+      const stillPresent = Object.values(currentState).some(presences => presences.some(p => p.puuid === puuid))
+      if (stillPresent) return
+
+      onlineUsers.delete(puuid)
+      const name = user.gameName ? `${CYAN}${B}${user.gameName}#${user.tagLine}${R}` : puuid.slice(0, 8)
+      console.log(`\n${ts()} 🔴 ${GRAY}Agent offline:${R} ${name}\n`)
+    }, 15_000)
+
+    offlineTimers.set(puuid, timer)
   }
 }
 
 presenceChan
   .on("presence", { event: "sync" }, () => {
-    syncPresenceState()
+    syncPresenceState(true)
   })
   .on("presence", { event: "join" }, ({ newPresences }) => {
-    for (const p of newPresences as unknown as Array<PresenceState & { puuid: string }>) {
-      if (!p.puuid) continue
-      onlineUsers.set(p.puuid, { gameName: p.gameName, tagLine: p.tagLine, phase: p.phase, since: p.since })
-      const name = p.gameName ? `${CYAN}${B}${p.gameName}#${p.tagLine}${R}` : p.puuid.slice(0, 8)
-      console.log(`\n${ts()} 🟢 ${GREEN}Agent online:${R} ${name}\n`)
-    }
+    syncPresenceState(true)
   })
   .on("presence", { event: "leave" }, ({ leftPresences }) => {
-    for (const p of leftPresences as unknown as Array<PresenceState & { puuid: string }>) {
-      if (!p.puuid) continue
-      const entry = onlineUsers.get(p.puuid)
-      const name  = entry?.gameName ? `${CYAN}${B}${entry.gameName}#${entry.tagLine}${R}` : p.puuid.slice(0, 8)
-      onlineUsers.delete(p.puuid)
-      console.log(`\n${ts()} 🔴 ${GRAY}Agent offline:${R} ${name}\n`)
-    }
+    syncPresenceState(true)
   })
   .subscribe((status) => {
     if (status === "SUBSCRIBED") {
