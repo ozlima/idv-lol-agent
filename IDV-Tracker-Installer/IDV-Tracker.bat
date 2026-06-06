@@ -11,7 +11,7 @@ set "DIR=%APP_ROOT%\idv-lol-agent"
 set "BOOTSTRAP=%APP_ROOT%\IDV-Tracker.bat"
 set "INSTALLER=%BOOT_DIR%installer.ps1"
 set "ICON_PATH=%BOOT_DIR%icon.png"
-set "NODE_DIR=%APP_ROOT%\runtime\node-v20.11.1-win-x64"
+set "NODE_DIR=%APP_ROOT%\runtime\node-v22.11.0-win-x64"
 
 if exist "%NODE_DIR%\node.exe" set "PATH=%NODE_DIR%;%PATH%"
 

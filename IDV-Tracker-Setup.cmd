@@ -6,7 +6,7 @@ color 0A
 set "APP_ROOT=%LOCALAPPDATA%\IDV Tracker"
 set "SETUP_DIR=%APP_ROOT%\setup"
 set "RUNTIME_DIR=%APP_ROOT%\runtime"
-set "NODE_VERSION=20.11.1"
+set "NODE_VERSION=22.11.0"
 set "NODE_DIR=%RUNTIME_DIR%\node-v%NODE_VERSION%-win-x64"
 set "NODE_ZIP=%RUNTIME_DIR%\node.zip"
 set "NODE_URL=https://nodejs.org/dist/v%NODE_VERSION%/node-v%NODE_VERSION%-win-x64.zip"

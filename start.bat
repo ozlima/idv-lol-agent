@@ -3,7 +3,7 @@ title IDV LoL Agent
 color 0A
 chcp 65001 >nul
 
-set "NODE_DIR=%LOCALAPPDATA%\IDV Tracker\runtime\node-v20.11.1-win-x64"
+set "NODE_DIR=%LOCALAPPDATA%\IDV Tracker\runtime\node-v22.11.0-win-x64"
 if exist "%NODE_DIR%\node.exe" set "PATH=%NODE_DIR%;%PATH%"
 
 echo.
