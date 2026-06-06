@@ -254,6 +254,12 @@ $ps.Runspace = $rs
         # marca como instalado
         Set-Content -Path (Join-Path $dir ".installed") -Value "" -Encoding ASCII
 
+        # inicia o agent imediatamente apos instalar
+        $bat = [System.IO.Path]::GetFullPath((Join-Path $dir "..\IDV-Tracker.bat"))
+        if (Test-Path $bat) {
+            Start-Process "cmd" -ArgumentList "/c `"$bat`"" -WindowStyle Minimized
+        }
+
         Ui {
             $sync.PanelInstalling.Visibility = [System.Windows.Visibility]::Collapsed
             $sync.PanelDone.Visibility       = [System.Windows.Visibility]::Visible
@@ -277,9 +283,6 @@ $ps.Runspace = $rs
 
 # ── Buttons ───────────────────────────────────────────────────────────────────
 $BtnOk.Add_Click({
-    $bat = [System.IO.Path]::GetFullPath((Join-Path $TargetDir "..\IDV-Tracker.bat"))
-    Start-Process "cmd" -ArgumentList "/c `"$bat`"" `
-        -WindowStyle Minimized
     $window.Close()
 })
 $BtnError.Add_Click({ $window.Close() })

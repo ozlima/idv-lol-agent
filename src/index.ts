@@ -681,6 +681,7 @@ async function onPhaseChange(phase: string) {
 
 async function main() {
   console.log("[agent] IDV LoL Agent iniciando...")
+  console.log("[agent] Abra o League Client para o agent ficar online.")
 
   await waitForLcu()
 
