@@ -22,7 +22,7 @@ if "%IDV_DEBUG%"=="0" if "%IDV_INNER%"=="0" (
         powershell -NoProfile -Command "& {Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Nao foi possivel preparar o instalador limpo.`nLog: %IDV_LAUNCHER_LOG%', 'IDV Tracker', 'OK', 'Error')}"
         exit /b 1
     )
-    powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "$ErrorActionPreference='Stop'; try { Add-Content -LiteralPath $env:IDV_LAUNCHER_LOG -Value ('[' + (Get-Date).ToString('dd/MM/yyyy HH:mm:ss') + '] Stage 1: iniciando copia local ' + $env:IDV_RELAUNCH); Start-Process -FilePath $env:IDV_RELAUNCH -ArgumentList '--inner' -WindowStyle Hidden } catch { Add-Type -AssemblyName System.Windows.Forms; Add-Content -LiteralPath $env:IDV_LAUNCHER_LOG -Value ('ERRO: ' + $_.Exception.Message); [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'IDV Tracker', 'OK', 'Error'); exit 1 }"
+    powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "$ErrorActionPreference='Stop'; try { Add-Content -LiteralPath $env:IDV_LAUNCHER_LOG -Value ('[' + (Get-Date).ToString('dd/MM/yyyy HH:mm:ss') + '] Stage 1: iniciando via cmd.exe ' + $env:IDV_RELAUNCH); if (-not (Test-Path -LiteralPath $env:IDV_RELAUNCH)) { throw ('Copia local nao encontrada: ' + $env:IDV_RELAUNCH) }; Start-Process -FilePath $env:ComSpec -ArgumentList @('/d','/c',$env:IDV_RELAUNCH,'--inner') -WindowStyle Hidden } catch { Add-Type -AssemblyName System.Windows.Forms; Add-Content -LiteralPath $env:IDV_LAUNCHER_LOG -Value ('ERRO: ' + $_.Exception.Message); [System.Windows.Forms.MessageBox]::Show($_.Exception.Message + \"`n`nLog: \" + $env:IDV_LAUNCHER_LOG, 'IDV Tracker', 'OK', 'Error'); exit 1 }"
     exit /b
 )
 
