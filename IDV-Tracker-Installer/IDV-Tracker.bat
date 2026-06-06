@@ -29,7 +29,7 @@ if exist "%DIR%\.env" (
     powershell -NoProfile -ExecutionPolicy Bypass -Command "$envText = 'SUPABASE_URL=' + $env:SUPABASE_URL + \"`r`n\" + 'SUPABASE_ANON_KEY=' + $env:SUPABASE_ANON_KEY; Set-Content -LiteralPath '%DIR%\.env' -Value $envText -Encoding UTF8"
 )
 
-if exist "%DIR%\.installed" if exist "%DIR%\node_modules" (
+if not "%IDV_FORCE_SETUP%"=="1" if exist "%DIR%\.installed" if exist "%DIR%\node_modules" (
     start "IDV Tracker" /MIN cmd /c ""%BOOTSTRAP%" --run"
     exit /b
 )
