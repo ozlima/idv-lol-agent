@@ -512,7 +512,7 @@ function getUpstreamRef(): string {
 function restartAgent(isUnderPM2: boolean) {
   setTimeout(() => {
     if (isUnderPM2) {
-      execSync("pm2 restart idv-lol-agent", { stdio: "inherit" })
+      execSync("pm2 restart idv-lol-agent --update-env", { stdio: "inherit" })
     } else {
       process.exit(42)
     }
@@ -683,6 +683,9 @@ async function main() {
   console.log("[agent] IDV LoL Agent iniciando...")
   console.log("[agent] Abra o League Client para o agent ficar online.")
 
+  const isUnderPM2 = !!process.env.PM2_HOME
+  startAutoUpdateChecker(isUnderPM2)
+
   await waitForLcu()
 
   const summoner = await getCurrentSummoner()
@@ -705,9 +708,6 @@ async function main() {
 
   await subscribeToGameflow(onPhaseChange)
   console.log("[agent] Aguardando eventos do LoL...")
-
-  const isUnderPM2 = !!process.env.PM2_HOME
-  startAutoUpdateChecker(isUnderPM2)
 
   // ── Presença online ────────────────────────────────────────────────────────
   const presenceClient = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!)

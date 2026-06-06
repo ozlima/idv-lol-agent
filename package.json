@@ -6,7 +6,10 @@
     "dev": "dotenvx run -- tsx src/index.ts",
     "start": "dotenvx run -- tsx src/index.ts",
     "watch": "dotenvx run -- tsx src/watch.ts",
-    "send-update": "dotenvx run -- tsx scripts/send-update.ts"
+    "send-update": "dotenvx run -- tsx scripts/send-update.ts",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
+    "pm2:restart": "pm2 restart idv-lol-agent --update-env",
+    "pm2:update": "git pull --ff-only && npm install --no-audit --no-fund && pm2 restart idv-lol-agent --update-env"
   },
   "dependencies": {
     "@dotenvx/dotenvx": "^1.0.0",
