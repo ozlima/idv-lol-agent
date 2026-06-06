@@ -1,10 +1,27 @@
 @echo off
 setlocal EnableExtensions
-title IDV Tracker Setup
-color 0A
 
-set "IDV_SILENT=0"
-if /I "%~1"=="--silent" set "IDV_SILENT=1"
+set "IDV_DEBUG=0"
+set "IDV_INNER=0"
+
+:parseArgs
+if "%~1"=="" goto argsDone
+if /I "%~1"=="--debug" set "IDV_DEBUG=1"
+if /I "%~1"=="--inner" set "IDV_INNER=1"
+if /I "%~1"=="--silent" set "IDV_INNER=1"
+shift
+goto parseArgs
+
+:argsDone
+if "%IDV_DEBUG%"=="0" if "%IDV_INNER%"=="0" (
+    powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "$p='%~f0'; Start-Process -FilePath 'cmd.exe' -ArgumentList ('/c ""' + $p + '"" --inner') -WindowStyle Hidden"
+    exit /b
+)
+
+if "%IDV_DEBUG%"=="1" (
+    title IDV Tracker Setup
+    color 0A
+)
 
 set "APP_ROOT=%LOCALAPPDATA%\IDV Tracker"
 set "SETUP_DIR=%APP_ROOT%\setup"
@@ -70,7 +87,7 @@ if errorlevel 1 (
 )
 
 call :log "Setup finalizado."
-if "%IDV_SILENT%"=="1" exit /b 0
+if "%IDV_DEBUG%"=="0" exit /b 0
 echo.
 if exist "%AGENT_LOG%" (
     echo Ultimas linhas do agent.log:
@@ -103,13 +120,16 @@ pause
 exit /b 0
 
 :log
-echo [%date% %time%] %~1
+if "%IDV_DEBUG%"=="1" echo [%date% %time%] %~1
 >> "%SETUP_LOG%" echo [%date% %time%] %~1
 exit /b 0
 
 :fail
 call :log "ERRO: %~1"
-if "%IDV_SILENT%"=="1" exit /b 1
+if "%IDV_DEBUG%"=="0" (
+    powershell -NoProfile -Command "& {Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('%~1`n`nLog: %SETUP_LOG%', 'IDV Tracker', 'OK', 'Error')}" >nul 2>&1
+    exit /b 1
+)
 echo.
 echo ERRO: %~1
 echo.
