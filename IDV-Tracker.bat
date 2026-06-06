@@ -30,6 +30,8 @@ if exist "%DIR%\.env" (
 )
 
 if not "%IDV_FORCE_SETUP%"=="1" if exist "%DIR%\.installed" if exist "%DIR%\node_modules" (
+    call :isAgentRunning
+    if not errorlevel 1 exit /b
     start "IDV Tracker" /MIN cmd /c ""%BOOTSTRAP%" --run"
     exit /b
 )
@@ -58,10 +60,16 @@ exit /b
 :runAgent
 if exist "%NODE_DIR%\node.exe" set "PATH=%NODE_DIR%;%PATH%"
 cd /d "%DIR%"
+call :isAgentRunning
+if not errorlevel 1 exit /b
 :agentLoop
 call npm run dev >> agent.log 2>&1
 if %errorlevel%==42 (
     call npm install --silent >> agent.log 2>&1
     goto agentLoop
 )
+exit /b %errorlevel%
+
+:isAgentRunning
+powershell -NoProfile -Command "$dir='%DIR%'; $mine=$PID; $found=Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $mine -and $_.CommandLine -and $_.CommandLine.Contains($dir) -and ($_.Name -eq 'node.exe' -or $_.Name -eq 'cmd.exe' -or $_.Name -eq 'npm.cmd') }; if ($found) { exit 0 } exit 1" >nul 2>&1
 exit /b %errorlevel%

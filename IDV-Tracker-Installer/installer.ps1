@@ -8,6 +8,12 @@ $StartupVbs = [System.IO.Path]::Combine(
     "Microsoft\Windows\Start Menu\Programs\Startup\IDV-LoL-Agent.vbs"
 )
 
+$InstallerMutexCreated = $false
+$InstallerMutex = New-Object System.Threading.Mutex($true, "Local\IDVTrackerInstaller", [ref]$InstallerMutexCreated)
+if (-not $InstallerMutexCreated) {
+    exit 0
+}
+
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
@@ -282,8 +288,15 @@ $ps.Runspace = $rs
         # inicia o agent imediatamente apos instalar
         $bat = [System.IO.Path]::GetFullPath((Join-Path $dir "..\IDV-Tracker.bat"))
         if (Test-Path $bat) {
-            $shell = New-Object -ComObject WScript.Shell
-            [void]$shell.Run("`"$bat`"", 0, $false)
+            $running = Get-CimInstance Win32_Process | Where-Object {
+                $_.CommandLine -and
+                $_.CommandLine.Contains($dir) -and
+                ($_.Name -eq "node.exe" -or $_.Name -eq "cmd.exe" -or $_.Name -eq "npm.cmd")
+            }
+            if (-not $running) {
+                $shell = New-Object -ComObject WScript.Shell
+                [void]$shell.Run("`"$bat`"", 0, $false)
+            }
         }
 
         Ui {
@@ -316,5 +329,12 @@ $BtnOk.Add_Click({
 $BtnError.Add_Click({ $window.Close() })
 
 $app = New-Object System.Windows.Application
-$app.Add_Exit({ $ps.Stop(); $rs.Close() })
+$app.Add_Exit({
+    $ps.Stop()
+    $rs.Close()
+    if ($InstallerMutex) {
+        try { $InstallerMutex.ReleaseMutex() } catch {}
+        $InstallerMutex.Dispose()
+    }
+})
 [void]$app.Run($window)
