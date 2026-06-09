@@ -190,7 +190,44 @@ export interface RankedQueueStats {
   leaguePoints:  number
   wins:          number
   losses:        number
+  hotStreak?:    boolean
+  veteran?:      boolean
+  freshBlood?:   boolean
+  inactive?:     boolean
   miniSeriesProgress?: string
+}
+
+export interface ChampionMastery {
+  championId:    number
+  championLevel: number
+  championPoints: number
+  lastPlayTime:  number
+}
+
+export async function getChampionMastery(puuid: string, championId: number): Promise<ChampionMastery | null> {
+  if (!championId) return null
+  try {
+    return await lcuGet<ChampionMastery>(
+      `/lol-champion-mastery/v4/champion-masteries/by-puuid/${puuid}/by-champion/${championId}`
+    )
+  } catch {
+    return null
+  }
+}
+
+export async function getRecentMatchResults(puuid: string, count = 10): Promise<Array<{ win: boolean; championId: number }>> {
+  try {
+    type Res = { games?: { games?: Array<{ participants?: Array<{ stats?: { win?: boolean }; championId?: number }> }> } }
+    const res = await lcuGet<Res>(
+      `/lol-match-history/v1/products/lol/${puuid}/matches?begIndex=0&endIndex=${count - 1}`
+    )
+    return (res?.games?.games ?? []).map(g => ({
+      win:        !!(g.participants?.[0]?.stats?.win),
+      championId: g.participants?.[0]?.championId ?? 0,
+    }))
+  } catch {
+    return []
+  }
 }
 
 export interface RankedStats {

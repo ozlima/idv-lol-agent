@@ -1,4 +1,4 @@
-import { getGameflowSession, getRankedStats, getSummonerByPuuid } from "./lcu.js"
+import { getGameflowSession, getRankedStats, getSummonerByPuuid, getChampionMastery, getRecentMatchResults } from "./lcu.js"
 import { publishEvent } from "./publisher.js"
 import { riotGetPlayerData, isRiotApiAvailable } from "./riot-api.js"
 
@@ -83,6 +83,19 @@ function detectSmurfFlags(
   return flags
 }
 
+// ─── Recent streak ───────────────────────────────────────────────────────────
+
+function computeStreak(matches: Array<{ win: boolean }>): { type: "win" | "loss"; count: number } | null {
+  if (matches.length < 2) return null
+  const first = matches[0].win
+  let count = 0
+  for (const m of matches) {
+    if (m.win === first) count++
+    else break
+  }
+  return count >= 2 ? { type: first ? "win" : "loss", count } : null
+}
+
 // ─── Main analysis ────────────────────────────────────────────────────────────
 
 export async function analyzeLoadingScreen(myPuuid: string, attempt = 1): Promise<LoadingAnalysisResult> {
@@ -110,9 +123,11 @@ export async function analyzeLoadingScreen(myPuuid: string, attempt = 1): Promis
   // Busca dados de todos os players em paralelo
   const playerData = await Promise.all(allParticipants.map(async (p) => {
     const puuid = p.puuid
-    const [ranked, summoner] = await Promise.all([
+    const [ranked, summoner, mastery, recentMatches] = await Promise.all([
       getRankedStats(puuid),
       getSummonerByPuuid(puuid),
+      p.championId > 0 ? getChampionMastery(puuid, p.championId) : Promise.resolve(null),
+      getRecentMatchResults(puuid, 10),
     ])
 
     const solo = ranked?.queueMap?.["RANKED_SOLO_5x5"]
@@ -128,7 +143,8 @@ export async function analyzeLoadingScreen(myPuuid: string, attempt = 1): Promis
     const total   = wins + losses
     const rawWr   = total > 0 ? wins / total * 100 : 0
     const wr      = total > 0 ? +(Math.min(100, Math.max(0, rawWr)).toFixed(1)) : 0
-    const reliableWinRate = total > 0 && wins <= total && rawWr <= 100
+    // Unreliable if 0 losses in 5+ games — LCU sometimes returns inflated wins
+    const reliableWinRate = total > 0 && wins <= total && rawWr <= 100 && !(losses === 0 && total >= 5)
     const isUnranked = !q || tier === "UNRANKED"
     const hasRankedData = !!q
     const mmr     = isUnranked ? 800 : estimateMMR(tier, division, lp)
@@ -138,6 +154,14 @@ export async function analyzeLoadingScreen(myPuuid: string, attempt = 1): Promis
 
     const pos = normalizePos(p.selectedPosition || p.assignedPosition)
     const smurfFlags = detectSmurfFlags(level, mmr, wins, losses, isUnranked)
+
+    const hotStreak       = q?.hotStreak ?? false
+    const streak          = computeStreak(recentMatches)
+    const masteryLevel    = mastery?.championLevel ?? null
+    const champGamesRecent = recentMatches.filter(m => m.championId === p.championId).length
+    // New on champion: mastery level 1-3 OR fewer than 3 games in last 10
+    const newChampion     = (masteryLevel !== null && masteryLevel <= 3) ||
+                            (recentMatches.length >= 8 && champGamesRecent < 3)
 
     const myTeamIds = teamOne.some(t => t.puuid === myPuuid)
       ? teamOne.map(t => t.puuid)
@@ -164,6 +188,10 @@ export async function analyzeLoadingScreen(myPuuid: string, attempt = 1): Promis
       isUnranked,
       hasRankedData,
       hasSummonerData: !!summoner,
+      hotStreak,
+      streak,
+      masteryLevel,
+      newChampion,
     }
   }))
 
@@ -277,6 +305,10 @@ export async function analyzeLoadingScreen(myPuuid: string, attempt = 1): Promis
     level:            p.level,
     smurfFlags:       p.smurfFlags,
     isMe:             p.isMe,
+    hotStreak:        p.hotStreak,
+    streak:           p.streak,
+    masteryLevel:     p.masteryLevel,
+    newChampion:      p.newChampion,
   })
 
   await publishEvent(myPuuid, "loading_analysis", {

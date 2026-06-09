@@ -528,7 +528,9 @@ function html() {
     .analysis-player:last-child { border-bottom: 0; }
     .analysis-player.risk { padding: 8px; border-left: 3px solid var(--yellow); border-bottom: 0; margin-bottom: 4px; border-radius: 0 4px 4px 0; background: rgba(240,200,90,.06); }
     .ap-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .ap-champ { font-weight: 850; }
     .ap-name { font-weight: 750; }
+    .ap-sub-name { color: var(--muted); font-size: 11px; margin-top: 1px; }
     .risk-flags { color: var(--yellow); font-size: 11px; margin-top: 3px; }
     .alert-banner { padding: 14px 12px; text-align: center; font-weight: 800; font-size: 14px; color: var(--green); background: rgba(66,210,125,.07); border-radius: 6px; margin-bottom: 8px; }
     .alert-banner.end { color: var(--muted); background: rgba(255,255,255,.04); }
@@ -1167,20 +1169,37 @@ function html() {
         const autofill = (analysis?.autofillSuspects || [])
           .filter(s => !side || s.team === side)
           .find(s => s.summonerName === p.summonerName)
-        const hasRisk = flags.length > 0 || !!autofill
+        const hasRisk = flags.length > 0 || !!autofill || p.newChampion
 
         const eloTxt = p.elo?.label || "Unranked"
         const mmrTxt = p.mmr ? "~" + p.mmr : ""
-        const lvTxt = validAccountLevel(p.level) ? "Lv " + p.level : ""
-        const wrTxt = p.elo?.reliableWinRate && p.elo.totalGames > 0
+        const lvTxt  = validAccountLevel(p.level) ? "Lv " + p.level : ""
+        const wrTxt  = p.elo?.reliableWinRate && p.elo.totalGames > 0
           ? p.elo.winRate + "%WR/" + p.elo.totalGames + "j" : ""
         const detail = [eloTxt, mmrTxt, lvTxt, wrTxt].filter(Boolean).join(" · ")
 
-        const autofillPill = autofill ? ' <span class="pill yellow">off-role?</span>' : ""
+        // Header: champion name prominent, player name below
+        const champName = p.championName || ""
+        const champHtml = champName
+          ? '<span class="ap-champ">' + esc(champName) + '</span>'
+          : '<span class="ap-name">' + esc(p.summonerName || "-") + '</span>'
+        const subNameHtml = champName
+          ? '<div class="ap-sub-name">' + esc(p.summonerName || "-") + (p.isMe ? ' <span style="color:var(--yellow);font-weight:700">(você)</span>' : "") + '</div>'
+          : (p.isMe ? '<div class="ap-sub-name" style="color:var(--yellow);font-weight:700">(você)</div>' : "")
+
+        // Pills
+        const streakData = p.streak
+        const streakPill = streakData && streakData.count >= 2
+          ? ' <span class="pill ' + (streakData.type === "win" ? "green" : "red") + '">' + streakData.count + (streakData.type === "win" ? "W" : "L") + '</span>'
+          : (p.hotStreak && !streakData ? ' <span class="pill green">streak W</span>' : "")
+        const autofillPill  = autofill ? ' <span class="pill yellow">off-role?</span>' : ""
+        const newChampPill  = p.newChampion ? ' <span class="pill yellow">novo champ</span>' : ""
+        const mePillHead    = champName && p.isMe ? "" : ""  // isMe shown in sub-name
 
         cards.push(
           '<div class="analysis-player' + (hasRisk ? " risk" : "") + '">' +
-          '<div class="ap-head"><span class="ap-name">' + esc(p.summonerName || "-") + '</span>' + autofillPill + '</div>' +
+          '<div class="ap-head">' + champHtml + mePillHead + streakPill + autofillPill + newChampPill + '</div>' +
+          subNameHtml +
           '<div class="sub">' + esc(detail) + '</div>' +
           (flags.length ? '<div class="risk-flags">' + esc(flags.map(f => f.label).join(" · ")) + '</div>' : '') +
           '</div>'
