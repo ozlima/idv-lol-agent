@@ -569,19 +569,19 @@ function html() {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 12px;
-      margin-top: 10px;
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      background: #14171a;
+      padding: 14px 16px;
+      margin-bottom: 10px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, rgba(100,168,255,.08) 0%, rgba(255,107,107,.08) 100%);
+      border: 1px solid rgba(255,255,255,.08);
     }
-    .mmr-compare-team { display: flex; flex-direction: column; gap: 3px; }
+    .mmr-compare-team { display: flex; flex-direction: column; gap: 4px; }
     .mmr-compare-team.right { text-align: right; }
-    .mmr-compare-tier { font-weight: 800; font-size: 17px; }
-    .mmr-compare-mmr { color: var(--muted); font-size: 12px; }
-    .mmr-compare-center { text-align: center; }
-    .mmr-compare-vs { font-size: 13px; font-weight: 800; color: var(--muted); }
-    .mmr-compare-diff { font-size: 12px; margin-top: 4px; font-weight: 700; }
+    .mmr-compare-tier { font-weight: 900; font-size: 22px; letter-spacing: -.5px; }
+    .mmr-compare-mmr { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase; }
+    .mmr-compare-center { text-align: center; display: flex; flex-direction: column; gap: 4px; align-items: center; }
+    .mmr-compare-vs { font-size: 11px; font-weight: 800; color: var(--muted); letter-spacing: 1px; }
+    .mmr-compare-diff { font-size: 15px; font-weight: 800; }
     .gold-chart {
       position: relative;
       margin-top: 12px;
@@ -722,13 +722,13 @@ function html() {
         <div class="panel">
           <div class="panel-head"><span class="panel-title">Resumo</span><span id="game-time" class="pill">-</span></div>
           <div class="panel-body">
+            <div id="mmr-compare" class="mmr-compare" style="display:none"></div>
             <div class="grid-2">
               <div class="metric"><label>Placar</label><strong id="score">-</strong></div>
               <div class="metric"><label>CS Times</label><strong id="cs">-</strong></div>
               <div class="metric"><label id="gold-label">Gold Diff</label><strong id="gold">-</strong></div>
               <div class="metric"><label>Online</label><strong id="online">0</strong></div>
             </div>
-            <div id="mmr-compare" class="mmr-compare" style="display:none"></div>
             <div id="gold-chart" class="gold-chart"></div>
           </div>
         </div>
@@ -822,8 +822,10 @@ function html() {
       const cs = gu.teamCS || {}
 
       // Smooth game clock: extrapolate from last known gameTime.
-      // Only tick after game_start fires — loading screen does not count.
+      // game_start sets the flag; fallback: latestGameUpdate present + no game_end
+      // covers cases where game_start event fell outside the hydration window.
       const gameStarted = !!current?.gameStarted
+        || (!!current?.latestGameUpdate && !current?.latestGameEnd)
       const guGameTime = Number(gu.gameTime || 0)
       if (gameStarted && guGameTime > _lastGameTimeSent) { _lastGameTimeSent = guGameTime; _lastGameTimestampAt = Date.now() }
       if (!gameStarted) { _lastGameTimeSent = 0; _lastGameTimestampAt = 0 }
