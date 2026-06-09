@@ -485,8 +485,11 @@ function html() {
       border: 1px solid var(--line);
       border-radius: 6px;
       background: #0e1114;
-      overflow: hidden;
+      overflow-x: auto;
+      overflow-y: hidden;
       cursor: crosshair;
+      scrollbar-width: thin;
+      scrollbar-color: #2c3338 #0e1114;
     }
     .gc-indicator {
       position: absolute;
@@ -496,13 +499,21 @@ function html() {
       pointer-events: none;
       display: none;
     }
-    .gold-chart svg { display: block; width: 100%; height: 100%; }
+    .gold-chart svg { display: block; min-width: 300px; width: 100%; height: 100%; }
     .gold-chart .area.blue { fill: rgba(100,168,255,.14); }
     .gold-chart .area.red  { fill: rgba(255,107,107,.14); }
     .gold-chart .line.blue { stroke: #64a8ff; }
     .gold-chart .line.red  { stroke: #ff6b6b; }
     .gold-chart .line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
     .gold-chart-label { fill: rgba(255,255,255,.35); font: 10px/1 Inter, Segoe UI, Arial, sans-serif; }
+    .analysis-player { padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.06); }
+    .analysis-player:last-child { border-bottom: 0; }
+    .analysis-player.risk { padding: 8px; border-left: 3px solid var(--yellow); border-bottom: 0; margin-bottom: 4px; border-radius: 0 4px 4px 0; background: rgba(240,200,90,.06); }
+    .ap-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .ap-name { font-weight: 750; }
+    .risk-flags { color: var(--yellow); font-size: 11px; margin-top: 3px; }
+    .alert-banner { padding: 14px 12px; text-align: center; font-weight: 800; font-size: 14px; color: var(--green); background: rgba(66,210,125,.07); border-radius: 6px; margin-bottom: 8px; }
+    .alert-banner.end { color: var(--muted); background: rgba(255,255,255,.04); }
     .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.06); }
     .row:last-child { border-bottom: 0; }
     .name { font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -645,6 +656,10 @@ function html() {
     let state = null
     let selectedPuuid = ""
     let _gcData = null
+    let _lastPhaseSeen = ""
+    let _phaseAt = 0
+    let _lastGameTimeSent = 0
+    let _lastGameTimestampAt = 0
     const $ = (id) => document.getElementById(id)
     const esc = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]))
     const fmt = (sec) => {
@@ -666,12 +681,30 @@ function html() {
       const current = currentPlayerState(s)
       renderPlayerTabs(s, current)
       $("online").textContent = s.onlineUsers.length
-      $("phase").textContent = current?.latestGameflow?.phase || current?.presence?.phase || "-"
+
+      const phase = current?.latestGameflow?.phase || current?.presence?.phase || ""
+      $("phase").textContent = phase || "-"
+
+      // Phase elapsed timer (ticks between server updates)
+      if (phase !== _lastPhaseSeen) { _lastPhaseSeen = phase; _phaseAt = Date.now() }
 
       const gu = current?.latestGameUpdate || {}
       const score = gu.score || {}
       const cs = gu.teamCS || {}
-      $("game-time").textContent = gu.gameTime ? fmt(gu.gameTime) : "-"
+
+      // Smooth game clock: extrapolate from last known gameTime
+      const guGameTime = Number(gu.gameTime || 0)
+      if (guGameTime > _lastGameTimeSent) { _lastGameTimeSent = guGameTime; _lastGameTimestampAt = Date.now() }
+      const liveGameTime = _lastGameTimeSent > 0 && (phase === "InProgress" || guGameTime > 0)
+        ? _lastGameTimeSent + (Date.now() - _lastGameTimestampAt) / 1000
+        : 0
+
+      const phaseElapsed = _phaseAt > 0 && phase && phase !== "None" && phase !== ""
+        ? Math.floor((Date.now() - _phaseAt) / 1000) : 0
+
+      $("game-time").textContent = liveGameTime > 0
+        ? fmt(liveGameTime)
+        : (phaseElapsed > 3 ? fmt(phaseElapsed) : "-")
       $("score").textContent = Number.isFinite(score.order) ? score.order + " x " + score.chaos : "-"
       $("cs").textContent = Number.isFinite(cs.order) ? cs.order + " x " + cs.chaos : "-"
 
@@ -807,7 +840,9 @@ function html() {
         if (!_gcData) return
         const { clean, xf, W, padL, cW } = _gcData
         const rect = el.getBoundingClientRect()
-        const svgX = (e.clientX - rect.left) / rect.width * W
+        const scrollLeft = el.scrollLeft || 0
+        const svgPxW = Math.max(el.scrollWidth, rect.width)
+        const svgX = ((e.clientX - rect.left + scrollLeft) / svgPxW) * W
         const ind = el.querySelector(".gc-indicator")
         const tip = document.getElementById("gc-tip")
 
@@ -832,7 +867,7 @@ function html() {
 
         if (ind) {
           ind.style.display = "block"
-          ind.style.left = ((xf(Number(pt.gameTime)) / W) * rect.width).toFixed(1) + "px"
+          ind.style.left = ((xf(Number(pt.gameTime)) / W) * svgPxW - scrollLeft).toFixed(1) + "px"
         }
 
         if (tip) {
@@ -919,8 +954,8 @@ function html() {
       const a = loading?.analysis || {}
       $("ally-elo").textContent = a.myTeamAvgMmr ? "MMR " + a.myTeamAvgMmr : "-"
       $("enemy-elo").textContent = a.enemyTeamAvgMmr ? "MMR " + a.enemyTeamAvgMmr : "-"
-      $("ally-analysis").innerHTML = renderAnalysisPanel(allyAnalysis, [a.highestEloMyTeam, a.lowestEloMyTeam], allyChamp, allyLive)
-      $("enemy-analysis").innerHTML = renderAnalysisPanel(enemyAnalysis, [a.highestEloEnemyTeam, a.lowestEloEnemyTeam], enemyChamp, enemyLive)
+      $("ally-analysis").innerHTML = renderAnalysisPanel(allyAnalysis, [a.highestEloMyTeam, a.lowestEloMyTeam], allyChamp, allyLive, a, "ALLY")
+      $("enemy-analysis").innerHTML = renderAnalysisPanel(enemyAnalysis, [a.highestEloEnemyTeam, a.lowestEloEnemyTeam], enemyChamp, enemyLive, a, "ENEMY")
     }
 
     function renderTeamCards(side, champTeam, analysisTeam, liveTeam, opponentChampTeam, opponentAnalysisTeam, opponentLiveTeam, highGold) {
@@ -1099,20 +1134,49 @@ function html() {
       return list.length ? list.map(b => '<span class="ban">' + esc(b) + '</span>').join("") : '<div class="empty">Sem bans ainda</div>'
     }
 
-    function renderAnalysisPanel(team, extremes, champTeam, liveTeam) {
+    function renderAnalysisPanel(team, extremes, champTeam, liveTeam, analysis, side) {
+      if (!team.length && !extremes.filter(Boolean).length)
+        return '<div class="empty">Aguardando loading analysis</div>'
+
       const cards = []
-      for (const [i, p] of extremes.filter(Boolean).entries()) {
-        const fullPlayer = team.find(t => t.summonerName && t.summonerName === p.summonerName) || p
-        const player = enrichAnalysisPlayer({ ...fullPlayer, ...p }, champTeam, liveTeam, i)
-        const champ = player.championName ? " · " + player.championName : ""
-        const pos = player.assignedPosition ? " · " + player.assignedPosition : ""
-        const level = validAccountLevel(player.level) ? " · Lv " + player.level : ""
-        cards.push('<div class="metric"><label>' + (i === 0 ? 'Maior elo' : 'Menor elo') + '</label><strong>' + esc(player.summonerName || "-") + '</strong><div class="sub">' + esc((player.elo || "-") + champ + pos + level + ' · ~' + (player.mmr ?? "-")) + '</div></div>')
+
+      for (let i = 0; i < team.length; i++) {
+        const p = enrichAnalysisPlayer(team[i], champTeam, liveTeam, i)
+        const flags = sanitizedSmurfFlags(p)
+        const autofill = (analysis?.autofillSuspects || [])
+          .filter(s => !side || s.team === side)
+          .find(s => s.summonerName === p.summonerName)
+        const hasRisk = flags.length > 0 || !!autofill
+
+        const eloTxt = p.elo?.label || "Unranked"
+        const mmrTxt = p.mmr ? "~" + p.mmr : ""
+        const lvTxt = validAccountLevel(p.level) ? "Lv " + p.level : ""
+        const wrTxt = p.elo?.reliableWinRate && p.elo.totalGames > 0
+          ? p.elo.winRate + "%WR/" + p.elo.totalGames + "j" : ""
+        const detail = [eloTxt, mmrTxt, lvTxt, wrTxt].filter(Boolean).join(" · ")
+
+        const autofillPill = autofill ? ' <span class="pill yellow">off-role?</span>' : ""
+
+        cards.push(
+          '<div class="analysis-player' + (hasRisk ? " risk" : "") + '">' +
+          '<div class="ap-head"><span class="ap-name">' + esc(p.summonerName || "-") + '</span>' + autofillPill + '</div>' +
+          '<div class="sub">' + esc(detail) + '</div>' +
+          (flags.length ? '<div class="risk-flags">' + esc(flags.map(f => f.label).join(" · ")) + '</div>' : '') +
+          '</div>'
+        )
       }
-      const risky = team
-        .map((p, i) => enrichAnalysisPlayer(p, champTeam, liveTeam, i))
-        .filter(p => sanitizedSmurfFlags(p).length || (p.streak?.type && p.streak.count >= 3))
-      for (const p of risky) cards.push('<div class="alert yellow">' + analysisLine(p) + '</div>')
+
+      if (!team.length) {
+        for (const [i, p] of extremes.filter(Boolean).entries()) {
+          if (!p) continue
+          const player = enrichAnalysisPlayer(p, champTeam, liveTeam, i)
+          cards.push(
+            '<div class="analysis-player"><div class="ap-head"><span class="ap-name">' + esc(player.summonerName || "-") + '</span></div>' +
+            '<div class="sub">' + esc((player.elo?.label || "-") + (player.mmr ? " · ~" + player.mmr : "")) + '</div></div>'
+          )
+        }
+      }
+
       return cards.join("") || '<div class="empty">Aguardando loading analysis</div>'
     }
     function analysisLine(p) {
@@ -1176,15 +1240,46 @@ function html() {
       if (validAccountLevel(player?.level)) return flags
       return flags.filter(f => !["very_low_level", "low_level_high_elo"].includes(f.code))
     }
+    const START_MSGS = [
+      "Começa o jogo na Vila Belmiro!",
+      "Começou!! Bora dar aquela pressão",
+      "Partida iniciada — foco total",
+      "Boa sorte e bom jogo!",
+      "GLHF! Que vença o melhor time",
+      "Jogo em andamento — domina o mapa",
+    ]
+    const END_MSGS = [
+      "Partida encerrada — GG!",
+      "Fim de jogo! Análise pós-jogo a caminho...",
+      "GG WP! Aguardando análise...",
+      "Jogo finalizado!",
+      "Boa partida! Até a próxima",
+    ]
+
     function renderAlerts(s) {
-      const alerts = []
-      alerts.push(...loadingAlerts(s.latestLoading, s.latestChampSelect, s.latestScoreboard))
-      alerts.push(...gameAlerts(s.latestLoading, s.latestScoreboard, s.latestScoreboardAt, s.latestGameUpdate, s.events || []))
+      const phase = s.latestGameflow?.phase || s.presence?.phase || ""
+      const gameTime = Number(s.latestGameUpdate?.gameTime ?? 0)
+      const sessionKey = String(s.latestScoreboard?.gameId || s.latestGameUpdate?.gameId || Math.floor(gameTime / 60))
+
+      const endPhases = ["EndOfGame", "WaitingForStats", "PreEndOfGame"]
+      if (endPhases.some(p => phase.toLowerCase().includes(p.toLowerCase()))) {
+        $("alert-count").textContent = "!"
+        $("alerts").innerHTML = '<div class="alert-banner end">' + esc(pickStable(END_MSGS, "end" + sessionKey)) + '</div>'
+        return
+      }
+
+      const alerts = gameAlerts(s.latestLoading, s.latestScoreboard, s.latestScoreboardAt, s.latestGameUpdate, s.events || [])
       const unique = dedupeAlerts(alerts).slice(0, 24)
-      $("alert-count").textContent = unique.length
-      $("alerts").innerHTML = unique.map(a =>
+      $("alert-count").textContent = String(unique.length)
+
+      const startBanner = phase === "InProgress" && gameTime > 0 && gameTime < 60
+        ? '<div class="alert-banner">' + esc(pickStable(START_MSGS, "start" + sessionKey)) + '</div>'
+        : ""
+      const alertsHtml = unique.map(a =>
         '<div class="alert ' + esc(a.kind || "") + '"><div class="alert-title">' + esc(a.title) + '</div><div class="sub">' + esc(a.detail) + '</div></div>'
-      ).join("") || '<div class="empty">Sem alertas agora</div>'
+      ).join("") || (phase === "InProgress" ? '<div class="empty">Sem alertas agora</div>' : '<div class="empty">Aguardando partida</div>')
+
+      $("alerts").innerHTML = startBanner + alertsHtml
     }
 
     function dedupeAlerts(alerts) {
