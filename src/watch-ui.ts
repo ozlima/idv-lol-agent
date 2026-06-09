@@ -868,7 +868,17 @@ function html() {
         : "-"
       renderGoldChart(current?.goldHistory || [])
 
-      renderSidePanels(current?.latestChampSelect, current?.latestLoading, current?.latestScoreboard)
+      // Only show loading/champ panels when a game session is active.
+      // If the game ended (latestGameEnd set, gameStarted false) or the client
+      // is closed, pass null to clear stale data from the previous game.
+      const gameOver = !!current?.latestGameEnd && !gameStarted
+      const clientClosed = phase === "LoLClosed"
+      const showPanels = !gameOver && !clientClosed
+      renderSidePanels(
+        showPanels ? current?.latestChampSelect : null,
+        showPanels ? current?.latestLoading : null,
+        showPanels ? current?.latestScoreboard : null,
+      )
       renderAlerts(current || {})
       renderPostGameAnalysis(current?.latestPostGameAnalysis)
       renderEvents(current?.events || [])
