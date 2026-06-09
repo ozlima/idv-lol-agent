@@ -1231,14 +1231,15 @@ function html() {
         out.push({
           kind: s.team === "ALLY" ? "blue" : "red",
           title: pickStable(titles, key),
-          detail: (s.team === "ALLY" ? "Aliado" : "Inimigo") + " - " + (validAccountLevel(player.level) ? "Lv " + player.level : "Lv ?") + " - ~" + player.mmr + " MMR - " + flags.map(f => f.label).join(", "),
+          detail: (s.team === "ALLY" ? "Aliado" : "Inimigo") + (validAccountLevel(player.level) ? " · Lv " + player.level : "") + " · ~" + player.mmr + " MMR · " + flags.map(f => f.label).join(", "),
         })
       }
       for (const p of [...(loading.myTeam || []), ...(loading.enemyTeam || [])]) {
         const total = Number(p.elo?.totalGames ?? 0)
         const wr = Number(p.elo?.winRate ?? 0)
+        const reliable = p.elo?.reliableWinRate !== false
         const team = (loading.myTeam || []).includes(p) ? "ALLY" : "ENEMY"
-        if (total >= 10 && total < 120 && wr >= 62) {
+        if (reliable && total >= 10 && total < 120 && wr >= 62 && wr <= 100) {
           const player = enrichAlertPlayer({ ...p, team }, loading, champSelect, scoreboard)
           const isMe = !!(player.isMe && team === "ALLY")
           const name = meOrName(isMe, player.summonerName)
@@ -1249,7 +1250,7 @@ function html() {
           out.push({
             kind: team === "ALLY" ? "blue" : "red",
             title: pickStable(titles, key),
-            detail: (isMe ? "Você" : (team === "ALLY" ? "Aliado" : "Inimigo")) + " - " + wr + "% WR em " + total + " jogos",
+            detail: (isMe ? "Você" : (team === "ALLY" ? "Aliado" : "Inimigo")) + " · " + wr + "%WR em " + total + " jogos",
           })
         }
       }

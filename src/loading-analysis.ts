@@ -44,13 +44,21 @@ function normalizePos(pos: string | undefined): string {
 
 // ─── Smurf heuristics ────────────────────────────────────────────────────────
 
+export interface LoadingAnalysisResult {
+  expectedPlayers: number
+  participantCount: number
+  rankedCount: number
+  summonerCount: number
+  complete: boolean
+}
+
 interface SmurfFlag {
   code:    string
   label:   string
 }
 
 function detectSmurfFlags(
-  level: number,
+  level: number | null,
   mmr: number,
   wins: number,
   losses: number,
@@ -60,9 +68,9 @@ function detectSmurfFlags(
   const wr = total > 0 ? wins / total : 0
   const flags: SmurfFlag[] = []
 
-  if (level > 0 && level < 60)
+  if (level !== null && level > 0 && level < 60)
     flags.push({ code: "very_low_level", label: `Conta nível ${level}` })
-  else if (level < 120 && mmr >= 1800)
+  else if (level !== null && level < 120 && mmr >= 1800)
     flags.push({ code: "low_level_high_elo", label: `Nível ${level} com elo alto` })
 
   if (!isUnranked && total < 40 && mmr >= 1500)
@@ -76,13 +84,13 @@ function detectSmurfFlags(
 
 // ─── Main analysis ────────────────────────────────────────────────────────────
 
-export async function analyzeLoadingScreen(myPuuid: string): Promise<void> {
-  console.log("[loading] Iniciando análise do loading screen...")
+export async function analyzeLoadingScreen(myPuuid: string, attempt = 1): Promise<LoadingAnalysisResult> {
+  console.log(`[loading] Iniciando analise do loading screen (tentativa ${attempt})...`)
 
   const session = await getGameflowSession()
   if (!session) {
     console.warn("[loading] Sessão não disponível")
-    return
+    return { expectedPlayers: 10, participantCount: 0, rankedCount: 0, summonerCount: 0, complete: false }
   }
 
   const mode = session.gameData?.gameMode ?? ""
@@ -95,7 +103,7 @@ export async function analyzeLoadingScreen(myPuuid: string): Promise<void> {
 
   if (allParticipants.length === 0) {
     console.warn("[loading] Nenhum participante encontrado na sessão")
-    return
+    return { expectedPlayers: 10, participantCount: 0, rankedCount: 0, summonerCount: 0, complete: false }
   }
 
   // Busca dados de todos os players em paralelo
@@ -114,13 +122,18 @@ export async function analyzeLoadingScreen(myPuuid: string): Promise<void> {
     const tier    = q?.tier      ?? "UNRANKED"
     const division = q?.division ?? "IV"
     const lp      = q?.leaguePoints ?? 0
-    const wins    = q?.wins    ?? 0
-    const losses  = q?.losses  ?? 0
+    const wins    = Math.max(0, q?.wins   ?? 0)
+    const losses  = Math.max(0, q?.losses ?? 0)
     const total   = wins + losses
-    const wr      = total > 0 ? +(wins / total * 100).toFixed(1) : 0
+    const rawWr   = total > 0 ? wins / total * 100 : 0
+    const wr      = total > 0 ? +(Math.min(100, Math.max(0, rawWr)).toFixed(1)) : 0
+    const reliableWinRate = total > 0 && wins <= total && rawWr <= 100
     const isUnranked = !q || tier === "UNRANKED"
+    const hasRankedData = !!q
     const mmr     = isUnranked ? 800 : estimateMMR(tier, division, lp)
-    const level   = summoner?.summonerLevel ?? 0
+    const level   = Number.isFinite(Number(summoner?.summonerLevel)) && Number(summoner?.summonerLevel) > 0
+      ? Number(summoner?.summonerLevel)
+      : null
 
     const pos = normalizePos(p.selectedPosition || p.assignedPosition)
     const smurfFlags = detectSmurfFlags(level, mmr, wins, losses, isUnranked)
@@ -138,15 +151,18 @@ export async function analyzeLoadingScreen(myPuuid: string): Promise<void> {
       isAlly:           myTeamIds.includes(puuid),
       summonerName:     displayName,
       championId:       p.championId,
+      championName:     null,
       assignedPosition: pos,
       spell1Id:         p.spell1Id,
       spell2Id:         p.spell2Id,
       teamId:           p.teamId,
-      elo: { tier, division, lp, wins, losses, winRate: wr, totalGames: total, label: eloLabel(tier, division, lp) },
+      elo: { tier, division, lp, wins, losses, winRate: wr, totalGames: total, reliableWinRate, label: eloLabel(tier, division, lp) },
       mmr,
       level,
       smurfFlags,
       isUnranked,
+      hasRankedData,
+      hasSummonerData: !!summoner,
     }
   }))
 
@@ -160,10 +176,23 @@ export async function analyzeLoadingScreen(myPuuid: string): Promise<void> {
 
   const myTeamAvg    = avgMmr(myTeam)
   const enemyTeamAvg = avgMmr(enemyTeam)
+  const expectedPlayers = 10
+  const rankedCount = playerData.filter(p => p.hasRankedData).length
+  const summonerCount = playerData.filter(p => p.hasSummonerData).length
+  const complete = playerData.length >= expectedPlayers
 
   // Menor elo do time aliado
   const lowestEloPlayer = myTeam.length > 0
     ? myTeam.reduce((a, b) => a.mmr <= b.mmr ? a : b)
+    : null
+  const highestEloMyTeam = myTeam.length > 0
+    ? myTeam.reduce((a, b) => a.mmr >= b.mmr ? a : b)
+    : null
+  const lowestEloEnemyTeam = enemyTeam.length > 0
+    ? enemyTeam.reduce((a, b) => a.mmr <= b.mmr ? a : b)
+    : null
+  const highestEloEnemyTeam = enemyTeam.length > 0
+    ? enemyTeam.reduce((a, b) => a.mmr >= b.mmr ? a : b)
     : null
 
   // Autofill: qualquer jogador com nível de conta baixo que está em posição improvável
@@ -181,9 +210,22 @@ export async function analyzeLoadingScreen(myPuuid: string): Promise<void> {
 
   const allSmurfs = playerData.filter(p => p.smurfFlags.length > 0)
 
-  const mapPlayer = (p: typeof playerData[0]) => ({
+  const mapEloSpot = (p: typeof playerData[0] | null) => p ? ({
+    puuid:            p.puuid,
     summonerName:     p.summonerName,
     championId:       p.championId,
+    championName:     p.championName,
+    assignedPosition: p.assignedPosition,
+    elo:              p.elo.label,
+    mmr:              p.mmr,
+    level:            p.level,
+  }) : null
+
+  const mapPlayer = (p: typeof playerData[0]) => ({
+    puuid:            p.puuid,
+    summonerName:     p.summonerName,
+    championId:       p.championId,
+    championName:     p.championName,
     assignedPosition: p.assignedPosition,
     spell1Id:         p.spell1Id,
     spell2Id:         p.spell2Id,
@@ -196,6 +238,14 @@ export async function analyzeLoadingScreen(myPuuid: string): Promise<void> {
 
   await publishEvent(myPuuid, "loading_analysis", {
     gameMode: mode,
+    attempt,
+    completeness: {
+      expectedPlayers,
+      participantCount: playerData.length,
+      rankedCount,
+      summonerCount,
+      complete,
+    },
     myTeam:   myTeam.map(mapPlayer),
     enemyTeam: enemyTeam.map(mapPlayer),
     analysis: {
@@ -203,11 +253,10 @@ export async function analyzeLoadingScreen(myPuuid: string): Promise<void> {
       enemyTeamAvgMmr: enemyTeamAvg,
       mmrDifference:   enemyTeamAvg - myTeamAvg,
       favoredTeam:     enemyTeamAvg > myTeamAvg ? "ENEMY" : "ALLY",
-      lowestEloMyTeam: lowestEloPlayer ? {
-        summonerName: lowestEloPlayer.summonerName,
-        elo:          lowestEloPlayer.elo.label,
-        mmr:          lowestEloPlayer.mmr,
-      } : null,
+      highestEloMyTeam: mapEloSpot(highestEloMyTeam),
+      lowestEloMyTeam: mapEloSpot(lowestEloPlayer),
+      highestEloEnemyTeam: mapEloSpot(highestEloEnemyTeam),
+      lowestEloEnemyTeam: mapEloSpot(lowestEloEnemyTeam),
       autofillSuspects: autofillSuspects.map(p => ({
         summonerName:     p.summonerName,
         assignedPosition: p.assignedPosition,
@@ -215,7 +264,10 @@ export async function analyzeLoadingScreen(myPuuid: string): Promise<void> {
         team:             p.isAlly ? "ALLY" : "ENEMY",
       })),
       smurfSuspects: allSmurfs.map(p => ({
+        puuid:        p.puuid,
         summonerName: p.summonerName,
+        championId:   p.championId,
+        championName: p.championName,
         level:        p.level,
         mmr:          p.mmr,
         flags:        p.smurfFlags,
@@ -224,5 +276,13 @@ export async function analyzeLoadingScreen(myPuuid: string): Promise<void> {
     },
   })
 
-  console.log(`[loading] Análise publicada — MMR: aliados ${myTeamAvg} × inimigos ${enemyTeamAvg}`)
+  console.log(`[loading] Analise publicada - ${playerData.length}/${expectedPlayers} jogadores, ranked ${rankedCount}/${playerData.length}, MMR: aliados ${myTeamAvg} x inimigos ${enemyTeamAvg}`)
+
+  return {
+    expectedPlayers,
+    participantCount: playerData.length,
+    rankedCount,
+    summonerCount,
+    complete,
+  }
 }
