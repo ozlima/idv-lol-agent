@@ -42,6 +42,8 @@ const MAX_EVENTS = 80
 const HYDRATE_EVENTS = 2000
 const MIN_POST_GAME_ANALYSIS_SECONDS = 600
 
+let analysisEnabled = true
+
 type PlayerDashboardState = {
   puuid: string
   latestLoading: Record<string, unknown> | null
@@ -222,7 +224,7 @@ function pushEvent(row: EventRow, realtime = false) {
   }
 
   broadcast()
-  if (realtime && row.event_type === "game_end") void analyzeGameEnd(event)
+  if (realtime && analysisEnabled && row.event_type === "game_end") void analyzeGameEnd(event)
 }
 
 function loadingQuality(data: Record<string, unknown> | null) {
@@ -268,6 +270,7 @@ function snapshot() {
   return {
     now: nowIso(),
     currentVersion: CURRENT_VERSION,
+    analysisEnabled,
     onlineUsers: [...onlineUsers.values()],
     players,
   }
@@ -750,7 +753,7 @@ function html() {
           <div class="panel-body" id="alerts"></div>
         </div>
         <div class="panel">
-          <div class="panel-head"><span class="panel-title">Analise Pos-Jogo</span><span id="post-game-status" class="pill">aguardando</span></div>
+          <div class="panel-head"><span class="panel-title">Analise Pos-Jogo</span><span id="post-game-status" class="pill">aguardando</span><button id="toggle-analysis" class="pill" style="cursor:pointer;margin-left:auto;border:none" onclick="toggleAnalysis()">IA ✓</button></div>
           <div class="panel-body" id="post-game-analysis"><div class="empty">Aguardando fim da partida</div></div>
         </div>
         <div class="panel">
@@ -808,6 +811,18 @@ function html() {
       }
       return "Iron IV"
     }
+    function toggleAnalysis() {
+      fetch("/api/toggle-analysis", { method: "POST" }).catch(() => null)
+    }
+
+    function updateAnalysisToggle(enabled) {
+      const btn = $("toggle-analysis")
+      if (!btn) return
+      btn.textContent = enabled ? "IA ✓" : "IA ✗"
+      btn.style.background = enabled ? "rgba(66,210,125,.18)" : "rgba(255,107,107,.18)"
+      btn.style.color = enabled ? "var(--green)" : "var(--red)"
+    }
+
     setInterval(() => { if (state) render(state) }, 1000)
 
     const es = new EventSource("/events")
@@ -815,6 +830,7 @@ function html() {
     es.onerror = () => $("conn").textContent = "reconectando"
     es.onmessage = (ev) => {
       state = JSON.parse(ev.data)
+      updateAnalysisToggle(state.analysisEnabled !== false)
       render(state)
     }
 
@@ -1908,6 +1924,14 @@ const server = http.createServer((req, res) => {
 
   if (req.method === "GET" && url.pathname === "/api/state") {
     sendJson(res, 200, snapshot())
+    return
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/toggle-analysis") {
+    analysisEnabled = !analysisEnabled
+    broadcast()
+    sendJson(res, 200, { analysisEnabled })
+    console.log(`[watch-ui] Analise IA ${analysisEnabled ? "ativada" : "desativada"}`)
     return
   }
 
