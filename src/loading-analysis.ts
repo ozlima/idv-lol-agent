@@ -143,8 +143,10 @@ export async function analyzeLoadingScreen(myPuuid: string, attempt = 1): Promis
     const total   = wins + losses
     const rawWr   = total > 0 ? wins / total * 100 : 0
     const wr      = total > 0 ? +(Math.min(100, Math.max(0, rawWr)).toFixed(1)) : 0
-    // Unreliable if 0 losses in 5+ games — LCU sometimes returns inflated wins
-    const reliableWinRate = total > 0 && wins <= total && rawWr <= 100 && !(losses === 0 && total >= 5)
+    // LCU bug: sometimes returns wins from previous splits while losses reset to 0 for new split
+    const wrSuspicious = losses === 0 && total >= 5
+    if (wrSuspicious) console.warn(`[loading] WR suspeito para ${puuid.slice(0, 8)}: ${wins}W/${losses}L — LCU pode estar misturando splits`)
+    const reliableWinRate = total > 0 && wins <= total && rawWr <= 100 && !wrSuspicious
     const isUnranked = !q || tier === "UNRANKED"
     const hasRankedData = !!q
     const mmr     = isUnranked ? 800 : estimateMMR(tier, division, lp)
@@ -195,12 +197,12 @@ export async function analyzeLoadingScreen(myPuuid: string, attempt = 1): Promis
     }
   }))
 
-  // ─── Riot API fallback para dados incompletos ─────────────────────────────
-  const incomplete = playerData.filter(p => p.level === null || !p.hasRankedData)
-  if (incomplete.length > 0) {
+  // ─── Riot API fallback — dados incompletos OU WR suspeito (LCU split bug) ──
+  const needsFallback = playerData.filter(p => p.level === null || !p.hasRankedData || !p.elo.reliableWinRate)
+  if (needsFallback.length > 0) {
     if (isRiotApiAvailable()) {
-      console.log(`[loading] ${incomplete.length} jogador(es) sem dados completos via LCU — tentando Riot API...`)
-      for (const p of incomplete) {
+      console.log(`[loading] ${needsFallback.length} jogador(es) com dados incompletos/suspeitos — tentando Riot API...`)
+      for (const p of needsFallback) {
         const idx      = playerData.indexOf(p)
         const riotData = await riotGetPlayerData(p.puuid)
         if (!riotData) continue
@@ -215,7 +217,7 @@ export async function analyzeLoadingScreen(myPuuid: string, attempt = 1): Promis
         const total    = wins + losses
         const rawWr    = total > 0 ? wins / total * 100 : 0
         const wr       = total > 0 ? +(Math.min(100, Math.max(0, rawWr)).toFixed(1)) : 0
-        const reliableWinRate = total > 0 && wins <= total && rawWr <= 100
+        const reliableWinRate = total > 0 && wins <= total && rawWr <= 100 && !(losses === 0 && total >= 5)
         const isUnranked = tier === "UNRANKED"
         const mmr      = isUnranked ? 800 : estimateMMR(tier, division, lp)
         const smurfFlags = detectSmurfFlags(level, mmr, wins, losses, isUnranked)
@@ -230,10 +232,10 @@ export async function analyzeLoadingScreen(myPuuid: string, attempt = 1): Promis
           hasRankedData:   useRiot || p.hasRankedData,
           hasSummonerData: riotData.level !== null || p.hasSummonerData,
         }
-        console.log(`[loading] Riot API fallback OK para ${p.summonerName}`)
+        console.log(`[loading] Riot API fallback OK para ${p.summonerName}${!p.elo.reliableWinRate ? " (WR corrigida)" : ""}`)
       }
     } else {
-      console.log(`[loading] ${incomplete.length} jogador(es) sem dados completos — RIOT_API_KEY não configurado, sem fallback`)
+      console.log(`[loading] ${needsFallback.length} jogador(es) com dados incompletos/suspeitos — RIOT_API_KEY não configurado, sem fallback`)
     }
   }
 
@@ -266,18 +268,7 @@ export async function analyzeLoadingScreen(myPuuid: string, attempt = 1): Promis
     ? enemyTeam.reduce((a, b) => a.mmr >= b.mmr ? a : b)
     : null
 
-  // Autofill: qualquer jogador com nível de conta baixo que está em posição improvável
-  // (refinamento: se a posição atribuída não é top 2 mais jogadas — não temos essa info via LCU sem Riot API)
-  // Flag conservadora: spell Smite (11) em posição não-jungle = autofill? vice-versa
-  const autofillSuspects = playerData.filter(p => {
-    const pos = p.assignedPosition
-    const hasSmite = p.spell1Id === 11 || p.spell2Id === 11
-    // Jungle sem smite
-    if (pos === "JUNGLE" && !hasSmite) return true
-    // Smite fora da jungle
-    if (pos !== "JUNGLE" && pos !== "" && hasSmite) return true
-    return false
-  })
+  const autofillSuspects: typeof playerData = []
 
   const allSmurfs = playerData.filter(p => p.smurfFlags.length > 0)
 

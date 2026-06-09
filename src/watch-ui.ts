@@ -1166,16 +1166,14 @@ function html() {
       for (let i = 0; i < team.length; i++) {
         const p = enrichAnalysisPlayer(team[i], champTeam, liveTeam, i)
         const flags = sanitizedSmurfFlags(p)
-        const autofill = (analysis?.autofillSuspects || [])
-          .filter(s => !side || s.team === side)
-          .find(s => s.summonerName === p.summonerName)
-        const hasRisk = flags.length > 0 || !!autofill || p.newChampion
+        const hasRisk = flags.length > 0 || p.newChampion
 
         const eloTxt = p.elo?.label || "Unranked"
         const mmrTxt = p.mmr ? "~" + p.mmr : ""
         const lvTxt  = validAccountLevel(p.level) ? "Lv " + p.level : ""
-        const wrTxt  = p.elo?.reliableWinRate && p.elo.totalGames > 0
-          ? p.elo.winRate + "%WR/" + p.elo.totalGames + "j" : ""
+        const wrTxt  = p.elo?.totalGames > 0
+          ? (p.elo?.reliableWinRate ? p.elo.winRate + "%WR/" + p.elo.totalGames + "j" : "WR ind.")
+          : ""
         const detail = [eloTxt, mmrTxt, lvTxt, wrTxt].filter(Boolean).join(" · ")
 
         // Header: champion name prominent, player name below
@@ -1192,13 +1190,11 @@ function html() {
         const streakPill = streakData && streakData.count >= 2
           ? ' <span class="pill ' + (streakData.type === "win" ? "green" : "red") + '">' + streakData.count + (streakData.type === "win" ? "W" : "L") + '</span>'
           : (p.hotStreak && !streakData ? ' <span class="pill green">streak W</span>' : "")
-        const autofillPill  = autofill ? ' <span class="pill yellow">off-role?</span>' : ""
-        const newChampPill  = p.newChampion ? ' <span class="pill yellow">novo champ</span>' : ""
-        const mePillHead    = champName && p.isMe ? "" : ""  // isMe shown in sub-name
+        const newChampPill = p.newChampion ? ' <span class="pill yellow">novo champ</span>' : ""
 
         cards.push(
           '<div class="analysis-player' + (hasRisk ? " risk" : "") + '">' +
-          '<div class="ap-head">' + champHtml + mePillHead + streakPill + autofillPill + newChampPill + '</div>' +
+          '<div class="ap-head">' + champHtml + streakPill + newChampPill + '</div>' +
           subNameHtml +
           '<div class="sub">' + esc(detail) + '</div>' +
           (flags.length ? '<div class="risk-flags">' + esc(flags.map(f => f.label).join(" · ")) + '</div>' : '') +
