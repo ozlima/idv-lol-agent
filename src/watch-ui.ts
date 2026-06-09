@@ -823,7 +823,22 @@ function html() {
       btn.style.color = enabled ? "var(--green)" : "var(--red)"
     }
 
-    setInterval(() => { if (state) render(state) }, 1000)
+    // Tick rápido: só clock e timer — não toca em innerHTML para não destruir seleção de texto
+    setInterval(() => {
+      if (!state) return
+      $("clock").textContent = new Date().toLocaleTimeString("pt-BR")
+      const current = currentPlayerState(state)
+      const gu = current?.latestGameUpdate || {}
+      const gameStarted = !!current?.gameStarted
+        || (!!current?.latestGameUpdate && !current?.latestGameEnd)
+      const guGameTime = Number(gu.gameTime || 0)
+      if (gameStarted && guGameTime > _lastGameTimeSent) { _lastGameTimeSent = guGameTime; _lastGameTimestampAt = Date.now() }
+      if (!gameStarted) { _lastGameTimeSent = 0; _lastGameTimestampAt = 0 }
+      const liveGameTime = gameStarted && _lastGameTimeSent > 0
+        ? _lastGameTimeSent + (Date.now() - _lastGameTimestampAt) / 1000
+        : 0
+      $("game-time").textContent = liveGameTime > 0 ? fmt(liveGameTime) : "-"
+    }, 1000)
 
     const es = new EventSource("/events")
     es.onopen = () => $("conn").textContent = "conectado"
@@ -835,50 +850,30 @@ function html() {
     }
 
     function render(s) {
-      $("clock").textContent = new Date().toLocaleTimeString("pt-BR")
       const current = currentPlayerState(s)
       renderPlayerTabs(s, current)
       $("online").textContent = s.onlineUsers.length
 
       const phase = current?.latestGameflow?.phase || current?.presence?.phase || ""
       $("phase").textContent = phase || "-"
-
-      // Phase elapsed timer (ticks between server updates)
       if (phase !== _lastPhaseSeen) { _lastPhaseSeen = phase; _phaseAt = Date.now() }
 
       const gu = current?.latestGameUpdate || {}
       const score = gu.score || {}
       const cs = gu.teamCS || {}
-
-      // Smooth game clock: extrapolate from last known gameTime.
-      // game_start sets the flag; fallback: latestGameUpdate present + no game_end
-      // covers cases where game_start event fell outside the hydration window.
-      const gameStarted = !!current?.gameStarted
-        || (!!current?.latestGameUpdate && !current?.latestGameEnd)
-      const guGameTime = Number(gu.gameTime || 0)
-      if (gameStarted && guGameTime > _lastGameTimeSent) { _lastGameTimeSent = guGameTime; _lastGameTimestampAt = Date.now() }
-      if (!gameStarted) { _lastGameTimeSent = 0; _lastGameTimestampAt = 0 }
-      const liveGameTime = gameStarted && _lastGameTimeSent > 0
-        ? _lastGameTimeSent + (Date.now() - _lastGameTimestampAt) / 1000
-        : 0
-
-      $("game-time").textContent = liveGameTime > 0 ? fmt(liveGameTime) : "-"
       const sb = current?.latestScoreboard || {}
-      const gold = sb.teamGold || {}
       const players = sb.players || []
       const me = players.find(p => p.isMe)
-      const myTeam = me?.team  // "ORDER" | "CHAOS" | undefined
+      const myTeam = me?.team
 
-      // Show my team's score/CS on the left
-      const scoreL = Number.isFinite(score.order)
-        ? (myTeam === "CHAOS" ? score.chaos : score.order) : null
-      const scoreR = Number.isFinite(score.order)
-        ? (myTeam === "CHAOS" ? score.order : score.chaos) : null
+      const scoreL = Number.isFinite(score.order) ? (myTeam === "CHAOS" ? score.chaos : score.order) : null
+      const scoreR = Number.isFinite(score.order) ? (myTeam === "CHAOS" ? score.order : score.chaos) : null
       $("score").textContent = scoreL !== null ? scoreL + " x " + scoreR : "-"
 
       const csL = Number.isFinite(cs.order) ? (myTeam === "CHAOS" ? cs.chaos : cs.order) : null
       const csR = Number.isFinite(cs.order) ? (myTeam === "CHAOS" ? cs.order : cs.chaos) : null
       $("cs").textContent = csL !== null ? csL + " x " + csR : "-"
+
       const stableGold = current?.stableGoldDiff
       const pending = current?.goldDiffPending === true
       const goldLabel = document.getElementById("gold-label")
@@ -888,9 +883,7 @@ function html() {
         : "-"
       renderGoldChart(current?.goldHistory || [])
 
-      // Only show loading/champ panels when a game session is active.
-      // If the game ended (latestGameEnd set, gameStarted false) or the client
-      // is closed, pass null to clear stale data from the previous game.
+      const gameStarted = !!current?.gameStarted || (!!current?.latestGameUpdate && !current?.latestGameEnd)
       const gameOver = !!current?.latestGameEnd && !gameStarted
       const clientClosed = phase === "LoLClosed"
       const showPanels = !gameOver && !clientClosed
