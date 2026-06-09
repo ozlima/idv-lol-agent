@@ -3,7 +3,7 @@ import { copyFileSync, existsSync, readFileSync, writeFileSync } from "fs"
 import { dirname, join } from "path"
 import { createClient, type RealtimeChannel } from "@supabase/supabase-js"
 import { waitForLcu, subscribeToGameflow, getChampSelectSession, getCurrentSummoner, getCurrentRunes, lcuGet } from "./lcu.js"
-import { getAllGameData, isGameRunning, type AllGameData, type LiveGameEvent } from "./live-client.js"
+import { getAllGameData, getEventData, isGameRunning, type AllGameData, type LiveGameEvent } from "./live-client.js"
 import { publishEvent } from "./publisher.js"
 import { analyzeLoadingScreen, type LoadingAnalysisResult } from "./loading-analysis.js"
 
@@ -585,21 +585,29 @@ async function handleGameEnd() {
   if (!updateInterval && !eventPollInterval && lastKnownGameTime <= 0) return
   gameEndSent = true
   const data = await getAllGameData()
+  const events = await getEventData()
   const gameTime = data ? Math.floor(data.gameData.gameTime) : lastKnownGameTime
   lastKnownGameTime = 0
 
-  await publishEvent(myPuuid, "game_end", {
-    gameTime,
-    allPlayers: data?.allPlayers.map(p => ({
-      summonerName: p.summonerName,
-      championName: p.championName,
-      team:         p.team,
-      kills:        p.scores.kills,
-      deaths:       p.scores.deaths,
-      assists:      p.scores.assists,
-      cs:           p.scores.creepScore,
-    })) ?? [],
-  })
+  // Determine win/loss from the GameEnd live event
+  const gameEndEvent = [...events].reverse().find((e: LiveGameEvent) => e.EventName === "GameEnd")
+  const result: string = gameEndEvent?.Result ?? ""
+
+  const allPlayers = await Promise.all((data?.allPlayers ?? []).map(async p => ({
+    summonerName: p.summonerName,
+    championName: p.championName,
+    team:         p.team,
+    kills:        p.scores.kills,
+    deaths:       p.scores.deaths,
+    assists:      p.scores.assists,
+    cs:           p.scores.creepScore,
+    netWorth:     await calcNetWorth(p.items ?? []),
+    isMe:         matchesMe(p.summonerName),
+  })))
+
+  const myTeam = allPlayers.find(p => p.isMe)?.team ?? ""
+
+  await publishEvent(myPuuid, "game_end", { gameTime, result, myTeam, allPlayers })
 }
 
 // â”€â”€â”€ Phase handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

@@ -598,6 +598,39 @@ function html() {
     .mmr-compare-center { text-align: center; display: flex; flex-direction: column; gap: 4px; align-items: center; }
     .mmr-compare-vs { font-size: 11px; font-weight: 800; color: var(--muted); letter-spacing: 1px; }
     .mmr-compare-diff { font-size: 15px; font-weight: 800; }
+    .game-result-banner {
+      padding: 14px 16px; border-radius: 8px; margin-bottom: 10px;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .game-result-banner.win  { background: linear-gradient(135deg, rgba(66,210,125,.12) 0%, rgba(66,210,125,.04) 100%); border: 1px solid rgba(66,210,125,.3); }
+    .game-result-banner.lose { background: linear-gradient(135deg, rgba(255,107,107,.12) 0%, rgba(255,107,107,.04) 100%); border: 1px solid rgba(255,107,107,.3); }
+    .game-result-banner.unknown { background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08); }
+    .game-result-title { font-size: 26px; font-weight: 900; letter-spacing: -1px; text-align: center; }
+    .game-result-duration { font-size: 11px; font-weight: 700; text-align: center; color: var(--muted); letter-spacing: .5px; text-transform: uppercase; margin-top: -4px; }
+    .game-result-mvp-row { display: flex; gap: 8px; }
+    .game-result-player-card {
+      flex: 1; padding: 10px 12px; border-radius: 6px; background: rgba(255,255,255,.04);
+      border: 1px solid rgba(255,255,255,.06); min-width: 0;
+    }
+    .game-result-player-card.mvp  { border-color: rgba(255,200,0,.3); background: rgba(255,200,0,.06); }
+    .game-result-player-card.worst { border-color: rgba(255,107,107,.25); background: rgba(255,107,107,.05); }
+    .game-result-player-label { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin-bottom: 4px; }
+    .game-result-player-label.mvp   { color: #ffc800; }
+    .game-result-player-label.worst { color: var(--red); }
+    .game-result-player-name { font-size: 13px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .game-result-player-champ { font-size: 11px; color: var(--muted); margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .game-result-player-kda { font-size: 12px; font-weight: 700; }
+    .game-result-scoreboard { margin-top: 6px; }
+    .game-result-scoreboard-header { display: flex; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); padding: 0 4px 4px; }
+    .game-result-scoreboard-row { display: flex; align-items: center; padding: 4px; border-radius: 4px; font-size: 12px; gap: 4px; }
+    .game-result-scoreboard-row:hover { background: rgba(255,255,255,.04); }
+    .game-result-scoreboard-row.me { font-weight: 800; background: rgba(100,168,255,.07); }
+    .game-result-scoreboard-row .col-name { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .game-result-scoreboard-row .col-champ { width: 80px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; }
+    .game-result-scoreboard-row .col-kda  { width: 70px; text-align: center; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+    .game-result-scoreboard-row .col-cs   { width: 36px; text-align: right; color: var(--muted); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+    .game-result-scoreboard-row .col-gold { width: 48px; text-align: right; color: var(--yellow); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+    .game-result-team-label { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; padding: 6px 4px 3px; color: var(--muted); }
     .gold-chart {
       position: relative;
       margin-top: 12px;
@@ -738,6 +771,7 @@ function html() {
         <div class="panel">
           <div class="panel-head"><span class="panel-title">Resumo</span><span id="game-time" class="pill">-</span></div>
           <div class="panel-body">
+            <div id="game-result" style="display:none"></div>
             <div id="mmr-compare" class="mmr-compare" style="display:none"></div>
             <div class="grid-2">
               <div class="metric"><label>Placar</label><strong id="score">-</strong></div>
@@ -887,6 +921,7 @@ function html() {
       const gameOver = !!current?.latestGameEnd && !gameStarted
       const clientClosed = phase === "LoLClosed"
       const showPanels = !gameOver && !clientClosed
+      renderGameResult(gameOver ? current?.latestGameEnd : null)
       renderSidePanels(
         showPanels ? current?.latestChampSelect : null,
         showPanels ? current?.latestLoading : null,
@@ -1065,6 +1100,92 @@ function html() {
         const tip = document.getElementById("gc-tip")
         if (tip) tip.style.display = "none"
       }
+    }
+
+    function mvpScore(p) {
+      const k = Number(p.kills ?? 0), d = Number(p.deaths ?? 0), a = Number(p.assists ?? 0)
+      const cs = Number(p.cs ?? 0), gold = Number(p.netWorth ?? 0)
+      const kda = (k + a) / Math.max(1, d)
+      return kda * 3 + k * 0.5 + a * 0.3 + cs * 0.01 + gold * 0.0002
+    }
+
+    function renderGameResult(gameEnd) {
+      const el = $("game-result")
+      if (!el) return
+      if (!gameEnd) { el.style.display = "none"; el.innerHTML = ""; return }
+
+      const d = gameEnd.data || gameEnd
+      const allPlayers = d.allPlayers || []
+      const duration = Number(d.gameTime || 0)
+      const rawResult = String(d.result || "").toLowerCase()
+      // result: "Win" = vitória, "Lose"/"Fail" = derrota, "" = desconhecido
+      const isWin  = rawResult === "win"
+      const isLose = rawResult === "lose" || rawResult === "fail"
+      const resultClass = isWin ? "win" : isLose ? "lose" : "unknown"
+      const resultLabel = isWin ? "VITÓRIA" : isLose ? "DERROTA" : "PARTIDA ENCERRADA"
+      const resultColor = isWin ? "var(--green)" : isLose ? "var(--red)" : "var(--muted)"
+
+      const myTeam = String(d.myTeam || "")
+      const order = allPlayers.filter(p => p.team === "ORDER")
+      const chaos = allPlayers.filter(p => p.team === "CHAOS")
+      const myTeamPlayers  = myTeam === "CHAOS" ? chaos : myTeam === "ORDER" ? order : allPlayers
+      const oppTeamPlayers = myTeam === "CHAOS" ? order : myTeam === "ORDER" ? chaos : []
+
+      // MVP: melhor pontuação no time aliado (ou geral se time desconhecido)
+      const pool = myTeamPlayers.length ? myTeamPlayers : allPlayers
+      const sorted = [...pool].sort((a, b) => mvpScore(b) - mvpScore(a))
+      const mvp = sorted[0]
+      const worst = sorted[sorted.length - 1]
+
+      function playerCard(p, type) {
+        if (!p) return ""
+        const k = Number(p.kills ?? 0), dea = Number(p.deaths ?? 0), a = Number(p.assists ?? 0)
+        return '<div class="game-result-player-card ' + type + '">' +
+          '<div class="game-result-player-label ' + type + '">' + (type === "mvp" ? "⭐ MVP" : "💀 Pior") + '</div>' +
+          '<div class="game-result-player-name">' + esc(p.summonerName || "?") + '</div>' +
+          '<div class="game-result-player-champ">' + esc(p.championName || "") + '</div>' +
+          '<div class="game-result-player-kda">' + k + '/' + dea + '/' + a + '</div>' +
+        '</div>'
+      }
+
+      function teamRows(players, label) {
+        if (!players.length) return ""
+        const header = '<div class="game-result-team-label">' + esc(label) + '</div>'
+        const rows = players.map(p => {
+          const k = Number(p.kills ?? 0), dea = Number(p.deaths ?? 0), a = Number(p.assists ?? 0)
+          const cs = Number(p.cs ?? 0)
+          const gold = Number(p.netWorth ?? 0)
+          const meClass = p.isMe ? " me" : ""
+          return '<div class="game-result-scoreboard-row' + meClass + '">' +
+            '<span class="col-name">' + esc(p.summonerName || "?") + '</span>' +
+            '<span class="col-champ">' + esc(p.championName || "") + '</span>' +
+            '<span class="col-kda">' + k + '/' + dea + '/' + a + '</span>' +
+            '<span class="col-cs">' + cs + '</span>' +
+            (gold > 0 ? '<span class="col-gold">' + Math.round(gold / 1000) + 'k</span>' : '') +
+          '</div>'
+        }).join("")
+        return header + rows
+      }
+
+      const mvpRow = sorted.length >= 2
+        ? '<div class="game-result-mvp-row">' + playerCard(mvp, "mvp") + playerCard(worst, "worst") + '</div>'
+        : (mvp ? '<div class="game-result-mvp-row">' + playerCard(mvp, "mvp") + '</div>' : "")
+
+      const scoreboardHtml = (order.length || chaos.length)
+        ? '<div class="game-result-scoreboard">' +
+            teamRows(myTeam === "CHAOS" ? chaos : order, myTeam === "CHAOS" ? "Caos (Aliados)" : "Order (Aliados)") +
+            teamRows(myTeam === "CHAOS" ? order : chaos, myTeam === "CHAOS" ? "Order (Inimigos)" : "Caos (Inimigos)") +
+          '</div>'
+        : ""
+
+      el.style.display = ""
+      el.innerHTML =
+        '<div class="game-result-banner ' + resultClass + '">' +
+          '<div class="game-result-title" style="color:' + resultColor + '">' + resultLabel + '</div>' +
+          (duration > 0 ? '<div class="game-result-duration">' + fmt(duration) + '</div>' : '') +
+          mvpRow +
+          scoreboardHtml +
+        '</div>'
     }
 
     function renderPostGameAnalysis(post) {
