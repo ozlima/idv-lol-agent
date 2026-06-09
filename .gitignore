@@ -4,6 +4,11 @@ IDV-LoL-Agent.bat
 idv-lol-agent/
 IDV-Tracker-Installer.zip
 IDV-Tracker-Setup.exe
+dist/
+IDV-Tracker-Setup-signed.exe
+IDV-Tracker-Setup (*).cmd
+IDV-Tracker-Setup (*).vbs
+run-silent.vbs
 *.js.map
 certs/*.pfx
 certs/*.p12

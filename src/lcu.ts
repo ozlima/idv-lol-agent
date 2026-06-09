@@ -1,6 +1,7 @@
-import { authenticate, connect, request, type Credentials } from "league-connect"
+﻿import { authenticate, connect, request, type Credentials } from "league-connect"
 
 let credentials: Credentials | null = null
+let activeGameflowSubscription = 0
 
 export async function getLcuCredentials(): Promise<Credentials> {
   if (!credentials) credentials = await authenticate({ unsafe: true })
@@ -16,7 +17,26 @@ export async function lcuGet<T>(path: string): Promise<T> {
 export async function waitForLcu(): Promise<void> {
   console.log("[lcu] Aguardando cliente do LoL iniciar...")
   credentials = await authenticate({ awaitConnection: true, pollInterval: 3_000, unsafe: true })
-  console.log(`[lcu] Cliente conectado — porta ${credentials.port}`)
+  console.log(`[lcu] Cliente conectado â€” porta ${credentials.port}`)
+}
+
+async function reconnectGameflow(
+  onPhaseChange: (phase: string) => void,
+  onDisconnect?: () => void,
+): Promise<void> {
+  while (true) {
+    try {
+      await waitForLcu()
+      const phase = await lcuGet<string>("/lol-gameflow/v1/gameflow-phase")
+      await subscribeToGameflow(onPhaseChange, onDisconnect)
+      onPhaseChange(phase)
+      return
+    } catch (e) {
+      credentials = null
+      console.warn("[lcu] Reconnect ainda nao pronto:", (e as Error).message)
+      await new Promise(r => setTimeout(r, 5_000))
+    }
+  }
 }
 
 export async function subscribeToGameflow(
@@ -25,21 +45,46 @@ export async function subscribeToGameflow(
 ): Promise<void> {
   const creds = await getLcuCredentials()
   const ws = await connect(creds)
+  let reconnecting = false
+  const subscriptionId = ++activeGameflowSubscription
+
+  function scheduleReconnect(reason: string) {
+    if (reconnecting) return
+    if (subscriptionId !== activeGameflowSubscription) return
+    reconnecting = true
+    console.log(`[lcu] WebSocket desconectado (${reason}) - aguardando League Client voltar...`)
+    credentials = null
+    onDisconnect?.()
+    setTimeout(() => {
+      reconnectGameflow(onPhaseChange, onDisconnect).catch(e => {
+        console.warn("[lcu] Reconnect falhou:", (e as Error).message)
+      })
+    }, 5_000)
+  }
 
   ws.subscribe("/lol-gameflow/v1/gameflow-phase", (data: unknown) => {
     if (typeof data === "string") onPhaseChange(data)
   })
 
+  ws.on("error", (e: Error) => {
+    console.warn("[lcu] WebSocket erro:", e.message)
+    scheduleReconnect("erro")
+    try { ws.close() } catch {}
+  })
+
   ws.on("close", () => {
-    console.log("[lcu] WebSocket desconectado — reconectando em 5s...")
-    credentials = null
-    onDisconnect?.()
-    setTimeout(() => subscribeToGameflow(onPhaseChange, onDisconnect), 5_000)
+    scheduleReconnect("close")
   })
 }
-
 export interface ChampSelectSession {
   localPlayerCellId: number
+  actions?: Array<Array<{
+    actorCellId: number
+    championId: number
+    completed: boolean
+    id: number
+    type: "ban" | "pick" | string
+  }>>
   myTeam: Array<{
     cellId: number
     championId: number
@@ -105,7 +150,7 @@ export async function getCurrentSummoner(): Promise<LcuSummoner | null> {
   }
 }
 
-// ─── Loading screen data ──────────────────────────────────────────────────────
+// â”€â”€â”€ Loading screen data â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export interface GameflowParticipant {
   puuid:            string
@@ -113,7 +158,7 @@ export interface GameflowParticipant {
   summonerName:     string
   championId:       number
   selectedPosition: string   // "top" | "jungle" | "middle" | "bottom" | "utility" | ""
-  assignedPosition: string   // alternativo dependendo da versão do client
+  assignedPosition: string   // alternativo dependendo da versÃ£o do client
   spell1Id:         number
   spell2Id:         number
   teamId:           number   // 100 = ORDER, 200 = CHAOS
@@ -140,8 +185,8 @@ export async function getGameflowSession(): Promise<GameflowSession | null> {
 }
 
 export interface RankedQueueStats {
-  tier:          string   // "IRON" | "BRONZE" | ... | "MASTER" | "UNRANKED"
-  division:      string   // "I" | "II" | "III" | "IV"
+  tier:          string
+  division:      string
   leaguePoints:  number
   wins:          number
   losses:        number

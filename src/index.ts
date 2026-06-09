@@ -1,4 +1,4 @@
-import { execSync } from "child_process"
+﻿import { execSync } from "child_process"
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from "fs"
 import { dirname, join } from "path"
 import { createClient, type RealtimeChannel } from "@supabase/supabase-js"
@@ -6,8 +6,6 @@ import { waitForLcu, subscribeToGameflow, getChampSelectSession, getCurrentSummo
 import { getAllGameData, isGameRunning, type AllGameData, type LiveGameEvent } from "./live-client.js"
 import { publishEvent } from "./publisher.js"
 import { analyzeLoadingScreen } from "./loading-analysis.js"
-
-// ─── Champion cache ───────────────────────────────────────────────────────────
 
 let champMap: Map<number, string> | null = null
 
@@ -26,8 +24,6 @@ async function getChampName(id: number): Promise<string> {
   return champMap?.get(id) ?? `ID ${id}`
 }
 
-// ─── Item price cache ─────────────────────────────────────────────────────────
-
 let itemPrices: Map<number, number> | null = null
 
 async function getItemPrice(itemId: number): Promise<number> {
@@ -39,9 +35,7 @@ async function getItemPrice(itemId: number): Promise<number> {
       const res = await fetch(`https://ddragon.leagueoflegends.com/cdn/${ver}/data/en_US/item.json`)
       if (res.ok) {
         const data = await res.json() as { data: Record<string, { gold: { total: number } }> }
-        itemPrices = new Map(
-          Object.entries(data.data).map(([id, item]) => [Number(id), item.gold.total])
-        )
+        itemPrices = new Map(Object.entries(data.data).map(([id, item]) => [Number(id), item.gold.total]))
       }
     } catch {
       itemPrices = new Map()
@@ -52,7 +46,7 @@ async function getItemPrice(itemId: number): Promise<number> {
 
 function calcNetWorth(items: Array<{ itemID: number }>): Promise<number> {
   return Promise.all(items.map(i => getItemPrice(i.itemID)))
-    .then(prices => prices.reduce((s, p) => s + p, 0))
+    .then(prices => prices.reduce((sum, price) => sum + price, 0))
 }
 
 type GamePhase =
@@ -60,7 +54,7 @@ type GamePhase =
   | "ChampSelect" | "GameStart" | "InProgress"
   | "WaitingForStats" | "PreEndOfGame" | "EndOfGame" | "TerminatedInError" | "LoLClosed"
 
-// ─── State ────────────────────────────────────────────────────────────────────
+// â”€â”€â”€ State â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 let currentPhase: GamePhase = "None"
 let myPuuid: string | null = null
@@ -69,13 +63,18 @@ let myGameName: string | null = null
 // Presence
 let presenceChannel: RealtimeChannel | null = null
 let presenceMeta: { puuid: string; gameName: string; tagLine: string } | null = null
+let lastPublishedPresencePhase = ""
 
-async function updatePresence(phase: string) {
+async function updatePresence(phase: string, force = false) {
   if (!presenceChannel || !presenceMeta) return
+  if (!force && phase === lastPublishedPresencePhase) return
+
   await presenceChannel.track({
     ...presenceMeta,
     phase,
     since: new Date().toISOString(),
+  }).then(() => {
+    lastPublishedPresencePhase = phase
   }).catch(() => null)
 }
 
@@ -83,19 +82,23 @@ async function updatePresence(phase: string) {
 let champSelectPollInterval: ReturnType<typeof setInterval> | null = null
 let lastHoverChampId = 0
 let champSelectSent = false
+let lastChampSelectFingerprint = ""
 
 // In-game state
 let updateInterval:    ReturnType<typeof setInterval> | null = null
 let eventPollInterval: ReturnType<typeof setInterval> | null = null
 let lastEventId = -1
 let lastItemsFingerprint = ""
+let lastKnownGameTime = 0
+let gameEndSent = false
 
-// ─── Champ Select ─────────────────────────────────────────────────────────────
+// â”€â”€â”€ Champ Select â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function startChampSelectPolling() {
   if (champSelectPollInterval) return
   lastHoverChampId = 0
   champSelectSent = false
+  lastChampSelectFingerprint = ""
   champSelectPollInterval = setInterval(async () => {
     const session = await getChampSelectSession()
     if (session) await handleChampSelectSession(session)
@@ -110,11 +113,38 @@ function stopChampSelectPolling() {
   }
 }
 
+function uniquePositive(ids: number[]) {
+  return [...new Set(ids.filter(id => Number.isFinite(id) && id > 0))]
+}
+
+function champSelectBanIds(session: Awaited<ReturnType<typeof getChampSelectSession>>) {
+  if (!session) return { myTeam: [] as number[], enemyTeam: [] as number[] }
+
+  const myCellIds = new Set((session.myTeam ?? []).map(p => p.cellId))
+  const theirCellIds = new Set((session.theirTeam ?? []).map(p => p.cellId))
+  const myTeam = [...(session.bans?.myTeamBans ?? [])]
+  const enemyTeam = [...(session.bans?.theirTeamBans ?? [])]
+
+  for (const actionGroup of session.actions ?? []) {
+    for (const action of actionGroup) {
+      if (action.type !== "ban" || !action.completed || action.championId <= 0) continue
+      if (myCellIds.has(action.actorCellId)) myTeam.push(action.championId)
+      else if (theirCellIds.has(action.actorCellId)) enemyTeam.push(action.championId)
+    }
+  }
+
+  return {
+    myTeam: uniquePositive(myTeam),
+    enemyTeam: uniquePositive(enemyTeam),
+  }
+}
+
 async function handleChampSelectSession(session: Awaited<ReturnType<typeof getChampSelectSession>>) {
-  if (!session || !myPuuid) return
+  if (!session || !myPuuid || !Array.isArray(session.myTeam) || !Array.isArray(session.theirTeam)) return
 
   const me = session.myTeam.find(p => p.cellId === session.localPlayerCellId)
   if (!me) return
+  await publishChampSelectState(session)
 
   // Hover detectado (antes do lock)
   const hoverId = me.championPickIntent
@@ -133,15 +163,12 @@ async function handleChampSelectSession(session: Awaited<ReturnType<typeof getCh
     })
   }
 
-  // Finalization — composição completa confirmada
+  // Finalization â€” composiÃ§Ã£o completa confirmada
   if (session.timer.phase === "FINALIZATION" && !champSelectSent) {
     champSelectSent = true
     const runes = await getCurrentRunes().catch(() => null)
-
-    const [myChampName, ...teamNames] = await Promise.all([
-      getChampName(me.championId),
-      ...session.myTeam.map(p => getChampName(p.championId)),
-    ])
+    const banIds = champSelectBanIds(session)
+    const myChampName = await getChampName(me.championId)
 
     await publishEvent(myPuuid, "champ_select_complete", {
       myChampionId:   me.championId,
@@ -171,14 +198,16 @@ async function handleChampSelectSession(session: Awaited<ReturnType<typeof getCh
         position:     p.assignedPosition,
       }))),
       bans: {
-        myTeam:    await Promise.all(session.bans.myTeamBans.filter(b => b > 0).map(id => getChampName(id))),
-        enemyTeam: await Promise.all(session.bans.theirTeamBans.filter(b => b > 0).map(id => getChampName(id))),
+        myTeam:       await Promise.all(banIds.myTeam.map(id => getChampName(id))),
+        enemyTeam:    await Promise.all(banIds.enemyTeam.map(id => getChampName(id))),
+        myTeamIds:    banIds.myTeam,
+        enemyTeamIds: banIds.enemyTeam,
       },
     })
   }
 }
 
-// ─── In-game ──────────────────────────────────────────────────────────────────
+// â”€â”€â”€ In-game â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function startGameTracking() {
   if (updateInterval) return
@@ -186,6 +215,8 @@ async function startGameTracking() {
 
   lastEventId = -1
   lastItemsFingerprint = ""
+  lastKnownGameTime = 0
+  gameEndSent = false
   console.log("[agent] Aguardando Live Client API...")
 
   let ready = false
@@ -193,12 +224,12 @@ async function startGameTracking() {
     if (await isGameRunning()) { ready = true; break }
     await new Promise(r => setTimeout(r, 3_000))
   }
-  if (!ready) { console.warn("[agent] Live Client API não respondeu"); return }
+  if (!ready) { console.warn("[agent] Live Client API nÃ£o respondeu"); return }
 
-  console.log("[agent] Live Client conectado — tracking iniciado")
+  console.log("[agent] Live Client conectado â€” tracking iniciado")
 
   const testData = await getAllGameData()
-  console.log("[agent] allgamedata:", testData ? `OK — ${testData.allPlayers.length} jogadores` : "FALHOU (null)")
+  console.log("[agent] allgamedata:", testData ? `OK â€” ${testData.allPlayers.length} jogadores` : "FALHOU (null)")
   if (!testData) return
 
   await sendGameUpdate("game_start")
@@ -211,9 +242,10 @@ async function startGameTracking() {
 }
 
 function stopGameTracking() {
+  const hadTracking = !!updateInterval || !!eventPollInterval
   if (updateInterval)    { clearInterval(updateInterval);    updateInterval    = null }
   if (eventPollInterval) { clearInterval(eventPollInterval); eventPollInterval = null }
-  if (updateInterval || eventPollInterval) console.log("[agent] Tracking encerrado")
+  if (hadTracking) console.log("[agent] Tracking encerrado")
 }
 
 async function sendScoreboard(data?: AllGameData) {
@@ -225,6 +257,10 @@ async function sendScoreboard(data?: AllGameData) {
     summonerName: p.summonerName,
     championName: p.championName,
     team:         p.team,
+    summonerSpells: {
+      spellOne: p.summonerSpells?.summonerSpellOne?.displayName ?? p.summonerSpells?.summonerSpellOne?.rawDisplayName,
+      spellTwo: p.summonerSpells?.summonerSpellTwo?.displayName ?? p.summonerSpells?.summonerSpellTwo?.rawDisplayName,
+    },
     level:        p.level,
     kills:        p.scores?.kills      ?? 0,
     deaths:       p.scores?.deaths     ?? 0,
@@ -237,7 +273,7 @@ async function sendScoreboard(data?: AllGameData) {
 
   const order = players.filter(p => p.team === "ORDER")
   const chaos = players.filter(p => p.team === "CHAOS")
-  const teamGold = (team: typeof order) => team.reduce((s, p) => s + p.netWorth, 0)
+  const teamGold = (team: typeof order) => team.reduce((sum, p) => sum + p.netWorth, 0)
   const orderGold = teamGold(order)
   const chaosGold = teamGold(chaos)
 
@@ -253,10 +289,56 @@ async function sendScoreboard(data?: AllGameData) {
   })
 }
 
+async function publishChampSelectState(session: NonNullable<Awaited<ReturnType<typeof getChampSelectSession>>>) {
+  if (!myPuuid) return
+  const banIds = champSelectBanIds(session)
+  const fingerprint = JSON.stringify({
+    phase: session.timer.phase,
+    myTeam: session.myTeam.map(p => [p.cellId, p.championId, p.championPickIntent, p.assignedPosition, p.spell1Id, p.spell2Id]),
+    enemyTeam: session.theirTeam.map(p => [p.cellId, p.championId, p.championPickIntent, p.assignedPosition]),
+    bans: banIds,
+  })
+  if (fingerprint === lastChampSelectFingerprint) return
+  lastChampSelectFingerprint = fingerprint
+
+  await publishEvent(myPuuid, "champ_select_state", {
+    phase: session.timer.phase,
+    timeLeftInPhase: Math.round(session.timer.adjustedTimeLeftInPhase),
+    myTeam: await Promise.all(session.myTeam.map(async p => ({
+      cellId: p.cellId,
+      championId: p.championId,
+      championName: p.championId > 0 ? await getChampName(p.championId) : null,
+      pickIntentId: p.championPickIntent,
+      pickIntentName: p.championPickIntent > 0 ? await getChampName(p.championPickIntent) : null,
+      position: p.assignedPosition,
+      spell1Id: p.spell1Id,
+      spell2Id: p.spell2Id,
+      isJungle: p.spell1Id === 11 || p.spell2Id === 11,
+      puuid: p.puuid,
+      isMe: p.cellId === session.localPlayerCellId,
+    }))),
+    enemyTeam: await Promise.all(session.theirTeam.map(async p => ({
+      cellId: p.cellId,
+      championId: p.championId,
+      championName: p.championId > 0 ? await getChampName(p.championId) : null,
+      pickIntentId: p.championPickIntent,
+      pickIntentName: p.championPickIntent > 0 ? await getChampName(p.championPickIntent) : null,
+      position: p.assignedPosition,
+    }))),
+    bans: {
+      myTeam: await Promise.all(banIds.myTeam.map(id => getChampName(id))),
+      enemyTeam: await Promise.all(banIds.enemyTeam.map(id => getChampName(id))),
+      myTeamIds: banIds.myTeam,
+      enemyTeamIds: banIds.enemyTeam,
+    },
+  })
+}
+
 async function sendGameUpdate(type: "game_start" | "game_update") {
   if (!myPuuid) return
   const data = await getAllGameData()
   if (!data) { console.warn(`[agent] sendGameUpdate(${type}): sem dados do Live Client`); return }
+  lastKnownGameTime = Math.floor(data.gameData.gameTime)
 
   const ap = data.activePlayer
   const allPlayers = data.allPlayers
@@ -269,7 +351,7 @@ async function sendGameUpdate(type: "game_start" | "game_update") {
   const gameTime = Math.floor(data.gameData?.gameTime ?? 0)
   const apStats  = ap.championStats
 
-  // KDA/CS vêm de allPlayers (mais confiável que activePlayer.scores)
+  // KDA/CS vÃªm de allPlayers (mais confiÃ¡vel que activePlayer.scores)
   const meInAll = allPlayers.find(p => matchesMe(p.summonerName))
   const kills   = meInAll?.scores?.kills      ?? ap.scores?.kills      ?? 0
   const deaths  = meInAll?.scores?.deaths     ?? ap.scores?.deaths     ?? 0
@@ -307,6 +389,10 @@ async function sendGameUpdate(type: "game_start" | "game_update") {
       summonerName: p.summonerName,
       championName: p.championName,
       team:         p.team,
+      summonerSpells: {
+        spellOne: p.summonerSpells?.summonerSpellOne?.displayName ?? p.summonerSpells?.summonerSpellOne?.rawDisplayName,
+        spellTwo: p.summonerSpells?.summonerSpellTwo?.displayName ?? p.summonerSpells?.summonerSpellTwo?.rawDisplayName,
+      },
       level:        p.level,
       isDead:       p.isDead,
       kills:        p.scores?.kills      ?? 0,
@@ -328,8 +414,9 @@ async function pollGameEvents() {
 
   const data = await getAllGameData()
   if (!data) return
+  lastKnownGameTime = Math.floor(data.gameData.gameTime)
 
-  // Detecta mudança de itens — fingerprint de todos os itens de todos os jogadores
+  // Detecta mudanÃ§a de itens â€” fingerprint de todos os itens de todos os jogadores
   const fingerprint = data.allPlayers
     .map(p => `${p.summonerName}:${p.items.map(i => i.itemID).join(",")}`)
     .join("|")
@@ -337,7 +424,7 @@ async function pollGameEvents() {
   if (fingerprint !== lastItemsFingerprint) {
     lastItemsFingerprint = fingerprint
     if (lastItemsFingerprint !== "") {
-      // Itens mudaram — publica scoreboard atualizado imediatamente
+      // Itens mudaram â€” publica scoreboard atualizado imediatamente
       await sendScoreboard(data)
     }
   }
@@ -347,9 +434,21 @@ async function pollGameEvents() {
   if (newEvents.length === 0) return
 
   lastEventId = Math.max(...newEvents.map(e => e.EventID))
-  for (const ev of newEvents) await processGameEvent(ev)
+  for (const ev of newEvents) {
+    await publishRawLolEvent(ev)
+    await processGameEvent(ev)
+  }
 }
 
+async function publishRawLolEvent(ev: LiveGameEvent) {
+  if (!myPuuid) return
+  await publishEvent(myPuuid, "raw_lol_event", {
+    eventId: ev.EventID,
+    eventName: ev.EventName,
+    eventTime: ev.EventTime,
+    raw: ev,
+  })
+}
 async function processGameEvent(ev: LiveGameEvent) {
   if (!myPuuid) return
 
@@ -462,9 +561,12 @@ async function processGameEvent(ev: LiveGameEvent) {
 }
 
 async function handleGameEnd() {
-  if (!myPuuid) return
+  if (!myPuuid || gameEndSent) return
+  if (!updateInterval && !eventPollInterval && lastKnownGameTime <= 0) return
+  gameEndSent = true
   const data = await getAllGameData()
-  const gameTime = data ? Math.floor(data.gameData.gameTime) : 0
+  const gameTime = data ? Math.floor(data.gameData.gameTime) : lastKnownGameTime
+  lastKnownGameTime = 0
 
   await publishEvent(myPuuid, "game_end", {
     gameTime,
@@ -480,7 +582,7 @@ async function handleGameEnd() {
   })
 }
 
-// ─── Phase handler ────────────────────────────────────────────────────────────
+// â”€â”€â”€ Phase handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // Auto-update
 let codeUpdateInProgress = false
@@ -649,13 +751,20 @@ async function markLeagueClientClosed() {
   champSelectSent = false
   lastHoverChampId = 0
   console.log(`[agent] League Client desconectado: ${prev} -> LoLClosed`)
-  await updatePresence("LoLClosed")
+  await updatePresence("LoLClosed", true)
 }
 async function onPhaseChange(phase: string) {
   if (phase === currentPhase) return
   const prev = currentPhase
   currentPhase = phase as GamePhase
-  console.log(`[agent] Fase: ${prev} → ${phase}`)
+  console.log(`[agent] Fase: ${prev} â†’ ${phase}`)
+  if (myPuuid) {
+    await publishEvent(myPuuid, "gameflow_phase", {
+      previousPhase: prev,
+      phase,
+      at: new Date().toISOString(),
+    })
+  }
 
   if (phase === "ChampSelect") {
     startChampSelectPolling()
@@ -668,14 +777,14 @@ async function onPhaseChange(phase: string) {
   }
 
   if (phase === "InProgress" && !updateInterval) {
-    // Jogo já estava em andamento quando o agent iniciou
+    // Jogo jÃ¡ estava em andamento quando o agent iniciou
     await startGameTracking()
   }
 
   if (phase === "WaitingForStats" || phase === "PreEndOfGame" || phase === "EndOfGame" || phase === "TerminatedInError") {
+    await handleGameEnd()
     stopChampSelectPolling()
     stopGameTracking()
-    await handleGameEnd()
   }
 
   if (phase === "None" || phase === "Lobby") {
@@ -685,10 +794,23 @@ async function onPhaseChange(phase: string) {
     lastHoverChampId = 0
   }
 
-  void updatePresence(phase)
+  void updatePresence(phase, prev === "LoLClosed")
 }
 
-// ─── Main ─────────────────────────────────────────────────────────────────────
+async function waitForCurrentSummoner() {
+  let attempts = 0
+  while (true) {
+    const summoner = await getCurrentSummoner()
+    if (summoner) return summoner
+
+    attempts++
+    if (attempts === 1 || attempts % 10 === 0) {
+      console.warn("[agent] Invocador ainda indisponivel; aguardando League Client estabilizar...")
+    }
+    await new Promise(r => setTimeout(r, 3_000))
+  }
+}
+// â”€â”€â”€ Main â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function main() {
   console.log("[agent] IDV LoL Agent iniciando...")
@@ -699,11 +821,7 @@ async function main() {
 
   await waitForLcu()
 
-  const summoner = await getCurrentSummoner()
-  if (!summoner) {
-    console.error("[agent] Não foi possível obter dados do invocador atual")
-    process.exit(1)
-  }
+  const summoner = await waitForCurrentSummoner()
 
   myPuuid    = summoner.puuid
   myGameName = summoner.gameName
@@ -720,7 +838,7 @@ async function main() {
   await subscribeToGameflow(onPhaseChange, () => void markLeagueClientClosed())
   console.log("[agent] Aguardando eventos do LoL...")
 
-  // ── Presença online ────────────────────────────────────────────────────────
+  // â”€â”€ PresenÃ§a online â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const presenceClient = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!)
   presenceChannel = presenceClient.channel("idv-agent-presence")
   presenceMeta    = { puuid: myPuuid!, gameName: myGameName!, tagLine: summoner.tagLine }
@@ -728,13 +846,13 @@ async function main() {
   presenceChannel.subscribe(async (status) => {
     if (status === "SUBSCRIBED") {
       await updatePresence(currentPhase)
-      console.log("[agent] Presença online ativa")
+      console.log("[agent] PresenÃ§a online ativa")
     }
   })
 
   setInterval(() => updatePresence(currentPhase), 60_000)
 
-  // ── Canal de admin ─────────────────────────────────────────────────────────
+  // â”€â”€ Canal de admin â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const adminClient = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!)
   adminClient
     .channel("idv-agent-admin")

@@ -31,6 +31,10 @@ export interface LivePlayer {
   championName: string
   team: "ORDER" | "CHAOS"
   position: string
+  summonerSpells?: {
+    summonerSpellOne?: { displayName?: string; rawDisplayName?: string }
+    summonerSpellTwo?: { displayName?: string; rawDisplayName?: string }
+  }
   isDead: boolean
   respawnTimer: number
   level: number

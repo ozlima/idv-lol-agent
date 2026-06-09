@@ -7,6 +7,7 @@ const supabase = createClient(
 
 export type EventType =
   | "champ_hover"
+  | "champ_select_state"
   | "champ_select_complete"
   | "loading_analysis"
   | "game_start"
@@ -17,6 +18,8 @@ export type EventType =
   | "multikill"
   | "first_blood"
   | "objective"
+  | "raw_lol_event"
+  | "gameflow_phase"
 
 export async function publishEvent(
   puuid: string,

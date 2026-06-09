@@ -1,4 +1,4 @@
-import { createClient } from "@supabase/supabase-js"
+﻿import { createClient } from "@supabase/supabase-js"
 import readline from "readline"
 import { config } from "dotenv"
 config()
@@ -7,7 +7,7 @@ const SUPABASE_URL      = process.env.SUPABASE_URL!
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY!
 
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-  console.error("SUPABASE_URL ou SUPABASE_ANON_KEY não definidos no .env")
+  console.error("SUPABASE_URL ou SUPABASE_ANON_KEY nÃ£o definidos no .env")
   process.exit(1)
 }
 
@@ -19,26 +19,46 @@ const MAGENTA = "\x1b[35m"; const WHITE = "\x1b[97m"
 function ts() { return `${GRAY}[${new Date().toLocaleTimeString("pt-BR")}]${R}` }
 function mins(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}` }
 
+function spellName(id: unknown) {
+  const spells: Record<number, string> = {
+    1: "Cleanse",
+    3: "Exhaust",
+    4: "Flash",
+    6: "Ghost",
+    7: "Heal",
+    11: "Smite",
+    12: "Teleport",
+    13: "Clarity",
+    14: "Ignite",
+    21: "Barrier",
+    32: "Mark",
+    39: "Mark",
+    54: "Placeholder",
+    55: "Placeholder",
+  }
+  const n = Number(id)
+  return spells[n] ? `${spells[n]} (${n})` : `Spell ${Number.isFinite(n) ? n : "?"}`
+}
 function fmt(event_type: string, puuid: string, data: Record<string, unknown>): string {
   const id = `${GRAY}${puuid.slice(0, 8)}...${R}`
   const lines: string[] = []
 
   switch (event_type) {
     case "champ_hover": {
-      const pos  = data.position ? ` · ${data.position}` : ""
+      const pos  = data.position ? ` Â· ${data.position}` : ""
       const jg   = data.isJungle ? ` ${YELLOW}[Jungle]${R}` : ""
-      const t    = data.timeLeftInPhase ? ` ⏱ ${data.timeLeftInPhase}s` : ""
+      const t    = data.timeLeftInPhase ? ` â± ${data.timeLeftInPhase}s` : ""
       const name = (data.championName as string) ?? `ID ${data.championId}`
-      lines.push(`${ts()} 👁️  ${CYAN}${B}champ_hover${R}  ${id}`)
+      lines.push(`${ts()} ðŸ‘ï¸  ${CYAN}${B}champ_hover${R}  ${id}`)
       lines.push(`   ${B}${name}${R}${pos}${jg}${t}`)
       break
     }
 
     case "champ_select_complete": {
-      lines.push(`${ts()} 🎮 ${GREEN}${B}champ_select_complete${R}  ${id}`)
+      lines.push(`${ts()} ðŸŽ® ${GREEN}${B}champ_select_complete${R}  ${id}`)
       const jg = data.isJungle ? ` ${YELLOW}[Jungle]${R}` : ""
-      lines.push(`   ${B}Meu pick:${R} ${B}${data.myChampionName ?? `ID ${data.myChampionId}`}${R} · ${data.myPosition}${jg}`)
-      lines.push(`   ${B}Spell 1:${R} ${data.spell1Id}  ${B}Spell 2:${R} ${data.spell2Id}`)
+      lines.push(`   ${B}Meu pick:${R} ${B}${data.myChampionName ?? `ID ${data.myChampionId}`}${R} Â· ${data.myPosition}${jg}`)
+      lines.push(`   ${B}Spells:${R} ${spellName(data.spell1Id)} + ${spellName(data.spell2Id)}`)
 
       const runes = data.runes as Record<string, unknown> | null
       if (runes) {
@@ -48,79 +68,114 @@ function fmt(event_type: string, puuid: string, data: Record<string, unknown>): 
       const myTeam = (data.myTeam as Array<Record<string, unknown>>) ?? []
       if (myTeam.length) {
         const picks = myTeam.filter(p => (p.championId as number) > 0)
-          .map(p => `${p.championId}(${p.position})`)
-        lines.push(`   ${B}Time:${R} ${picks.join("  ")}`)
+          .map(p => `${p.championName ?? `ID ${p.championId}`} (${p.position ?? "?"})`)
+        lines.push(`   ${B}Time:${R} ${picks.join("  | ")}`)
       }
 
-      const bans = data.bans as { myTeam: number[]; enemyTeam: number[] } | undefined
+      const bans = data.bans as { myTeam: string[]; enemyTeam: string[]; myTeamIds?: number[]; enemyTeamIds?: number[] } | undefined
       if (bans) {
-        lines.push(`   ${B}Bans nossos:${R} ${bans.myTeam.join(" ")}  ${B}Bans inimigos:${R} ${bans.enemyTeam.join(" ")}`)
+        const mine = bans.myTeam.length ? bans.myTeam.join(", ") : `${GRAY}indisponivel${R}`
+        const enemy = bans.enemyTeam.length ? bans.enemyTeam.join(", ") : `${GRAY}indisponivel${R}`
+        lines.push(`   ${B}Bans nossos:${R} ${mine}  ${B}Bans inimigos:${R} ${enemy}`)
       }
       break
     }
 
     case "loading_analysis": {
+      type EloSpot = { summonerName: string; elo: string; mmr: number; level?: number; team?: string } | null
       const analysis = data.analysis as {
-        myTeamAvgMmr: number; enemyTeamAvgMmr: number; mmrDifference: number; favoredTeam: string
-        lowestEloMyTeam: { summonerName: string; elo: string; mmr: number } | null
+        myTeamAvgMmr: number
+        enemyTeamAvgMmr: number
+        mmrDifference: number
+        favoredTeam: string
+        highestEloMyTeam?: EloSpot
+        lowestEloMyTeam?: EloSpot
+        highestEloEnemyTeam?: EloSpot
+        lowestEloEnemyTeam?: EloSpot
         autofillSuspects: Array<{ summonerName: string; assignedPosition: string; spells: number[]; team: string }>
         smurfSuspects: Array<{ summonerName: string; level: number; mmr: number; flags: Array<{ code: string; label: string }>; team: string }>
+        streakAlerts?: Array<{ summonerName: string; team: string; type: "win" | "loss"; count: number; recent: string[] }>
       }
-      const myTeam    = (data.myTeam    as Array<{ summonerName: string; assignedPosition: string; elo: { label: string }; mmr: number; level: number; isMe: boolean; smurfFlags: Array<{ label: string }> }>) ?? []
-      const enemyTeam = (data.enemyTeam as Array<{ summonerName: string; assignedPosition: string; elo: { label: string }; mmr: number; level: number; smurfFlags: Array<{ label: string }> }>) ?? []
+      const myTeam = (data.myTeam as Array<{
+        summonerName: string; assignedPosition: string; championId?: number
+        elo: { label: string }; mmr: number; level: number; isMe: boolean
+        smurfFlags: Array<{ label: string }>
+        streak?: { type: string | null; count: number; recent: string[] }
+      }>) ?? []
+      const enemyTeam = (data.enemyTeam as typeof myTeam) ?? []
 
       const favor = analysis.favoredTeam === "ALLY"
         ? `${GREEN}+${Math.abs(analysis.mmrDifference)} MMR (aliados)${R}`
         : `${RED}+${Math.abs(analysis.mmrDifference)} MMR (inimigos)${R}`
 
-      lines.push(`${ts()} 🔍 ${CYAN}${B}loading_analysis${R}  ${id}`)
-      lines.push(`   ${B}MMR estimado:${R}  🔵 Aliados ${YELLOW}${B}${analysis.myTeamAvgMmr}${R}  × Inimigos ${YELLOW}${B}${analysis.enemyTeamAvgMmr}${R}  — ${favor}`)
+      lines.push(`${ts()} ${CYAN}${B}loading_analysis${R}  ${id}`)
+      lines.push(`   ${B}MMR estimado:${R} Aliados ${YELLOW}${B}${analysis.myTeamAvgMmr}${R} x Inimigos ${YELLOW}${B}${analysis.enemyTeamAvgMmr}${R} - ${favor}`)
 
-      if (analysis.lowestEloMyTeam) {
-        const low = analysis.lowestEloMyTeam
-        lines.push(`   ${B}Menor elo:${R}  ${RED}${low.summonerName}${R} — ${low.elo} (~${low.mmr} MMR)`)
+      const spot = (label: string, p?: EloSpot) => p
+        ? `${label}: ${B}${p.summonerName}${R} ${DIM}${p.elo}${R} ~${p.mmr}`
+        : `${label}: ${GRAY}indisponivel${R}`
+
+      if (analysis.highestEloMyTeam || analysis.lowestEloMyTeam || analysis.highestEloEnemyTeam || analysis.lowestEloEnemyTeam) {
+        lines.push(`   ${spot("Maior elo aliado", analysis.highestEloMyTeam)}  |  ${spot("Menor elo aliado", analysis.lowestEloMyTeam)}`)
+        lines.push(`   ${spot("Maior elo inimigo", analysis.highestEloEnemyTeam)}  |  ${spot("Menor elo inimigo", analysis.lowestEloEnemyTeam)}`)
+      } else if (analysis.lowestEloMyTeam) {
+        lines.push(`   ${spot("Menor elo aliado", analysis.lowestEloMyTeam)}`)
       }
 
-      lines.push(`   ${"─".repeat(55)}`)
-
-      const fmtP = (p: typeof myTeam[0], sideIcon: string) => {
-        const me    = p.isMe ? ` ${YELLOW}◀ VOCÊ${R}` : ""
-        const flags = p.smurfFlags ?? []
-        const smurf = flags.length ? ` ${RED}⚠ ${flags.map((f: { label: string }) => f.label).join(", ")}${R}` : ""
-        const pos   = p.assignedPosition ? ` [${p.assignedPosition}]` : ""
-        const elo   = p.elo?.label ?? "?"
-        return `  ${sideIcon} ${B}${p.summonerName || "?"}${R}${pos}${me}  ${DIM}${elo}${R} ~${p.mmr}${smurf}`
-      }
-
-      lines.push(`   ${B}Aliados:${R}`)
-      for (const p of myTeam) lines.push(fmtP(p as typeof myTeam[0] & { isMe: boolean }, "🔵"))
-
-      lines.push(`   ${B}Inimigos:${R}`)
-      for (const p of enemyTeam) lines.push(fmtP(p as typeof myTeam[0], "🔴"))
-
-      if (analysis.autofillSuspects.length) {
-        lines.push(`   ${B}Autofill?${R}`)
-        for (const a of analysis.autofillSuspects) {
-          const side = a.team === "ALLY" ? "🔵" : "🔴"
-          lines.push(`   ${side} ${YELLOW}${a.summonerName}${R} — ${a.assignedPosition} (spells: ${a.spells.join(", ")})`)
+      const streakAlerts = analysis.streakAlerts ?? []
+      if (streakAlerts.length) {
+        lines.push(`   ${B}Streak 3+:${R}`)
+        for (const s of streakAlerts) {
+          const side = s.team === "ALLY" ? "Aliado" : "Inimigo"
+          const color = s.type === "win" ? GREEN : RED
+          const kind = s.type === "win" ? "wins" : "losses"
+          lines.push(`   ${side} ${color}${s.summonerName}${R} - ${s.count} ${kind} (${s.recent.join("")})`)
         }
       }
 
-      if (analysis.smurfSuspects.length) {
+      const fmtP = (p: typeof myTeam[0], side: string) => {
+        const me = p.isMe ? ` ${YELLOW}< VOCE${R}` : ""
+        const flags = p.smurfFlags?.length ? ` ${RED}! ${p.smurfFlags.map(f => f.label).join(", ")}${R}` : ""
+        const streak = p.streak?.type && p.streak.count >= 3
+          ? ` ${p.streak.type === "win" ? GREEN : RED}${p.streak.count}${p.streak.type === "win" ? "W" : "L"}${R}`
+          : ""
+        const pos = p.assignedPosition ? ` [${p.assignedPosition}]` : ""
+        return `  ${side} ${B}${p.summonerName || "?"}${R}${pos}${me}  ${DIM}${p.elo?.label ?? "?"}${R} ~${p.mmr}${streak}${flags}`
+      }
+
+      lines.push(`   ${B}Aliados:${R}`)
+      for (const p of myTeam) lines.push(fmtP(p, "A"))
+      lines.push(`   ${B}Inimigos:${R}`)
+      for (const p of enemyTeam) lines.push(fmtP(p, "E"))
+
+      if (analysis.autofillSuspects?.length) {
+        lines.push(`   ${B}Autofill?${R}`)
+        for (const a of analysis.autofillSuspects) {
+          const side = a.team === "ALLY" ? "Aliado" : "Inimigo"
+          lines.push(`   ${side} ${YELLOW}${a.summonerName}${R} - ${a.assignedPosition} (spells: ${a.spells.join(", ")})`)
+        }
+      }
+
+      if (analysis.smurfSuspects?.length) {
         lines.push(`   ${B}Suspeitos de smurf:${R}`)
         for (const s of analysis.smurfSuspects) {
-          const side = s.team === "ALLY" ? "🔵" : "🔴"
-          lines.push(`   ${side} ${RED}${s.summonerName}${R}  Lv${s.level}  ~${s.mmr} MMR`)
-          for (const f of s.flags) lines.push(`       → ${f.label}`)
+          const side = s.team === "ALLY" ? "Aliado" : "Inimigo"
+          lines.push(`   ${side} ${RED}${s.summonerName}${R} Lv${s.level} ~${s.mmr} MMR`)
+          for (const f of s.flags) lines.push(`      -> ${f.label}`)
         }
       }
       break
     }
 
+    case "gameflow_phase": {
+      lines.push(`${ts()} ${CYAN}${B}gameflow${R}  ${id}`)
+      lines.push(`   ${data.previousPhase ?? "?"} -> ${data.phase ?? "?"}`)
+      break
+    }
     case "game_start":
     case "game_update": {
       const isStart = event_type === "game_start"
-      const icon = isStart ? "⚔️ " : "📊"
+      const icon = isStart ? "âš”ï¸ " : "ðŸ“Š"
       const color = isStart ? GREEN : BLUE
       const me = data.me as Record<string, unknown>
       const score = data.score as { order: number; chaos: number }
@@ -134,45 +189,45 @@ function fmt(event_type: string, puuid: string, data: Record<string, unknown>): 
         `Gold: ${YELLOW}${me?.gold}${R}  ` +
         `KP: ${me?.killParticipation}%`
       )
-      lines.push(`   HP máx: ${me?.maxHp}  Lv: ${me?.level}`)
+      lines.push(`   HP mÃ¡x: ${me?.maxHp}  Lv: ${me?.level}`)
       if (me?.abilities) {
         const ab = me.abilities as Record<string, number>
         lines.push(`   Abilities: Q${ab.Q} W${ab.W} E${ab.E} R${ab.R}`)
       }
-      lines.push(`   🔵 ${B}${score?.order}${R}  ×  ${B}${score?.chaos}${R} 🔴${teamCS ? `  CS times: ${teamCS.order} × ${teamCS.chaos}` : ""}`)
+      lines.push(`   ðŸ”µ ${B}${score?.order}${R}  Ã—  ${B}${score?.chaos}${R} ðŸ”´${teamCS ? `  CS times: ${teamCS.order} Ã— ${teamCS.chaos}` : ""}`)
       break
     }
 
     case "first_blood": {
-      const isMe = data.isMe ? `  ${YELLOW}← VOCÊ${R}` : ""
-      lines.push(`${ts()} 🩸 ${RED}${B}first_blood${R}  ${id}`)
+      const isMe = data.isMe ? `  ${YELLOW}â† VOCÃŠ${R}` : ""
+      lines.push(`${ts()} ðŸ©¸ ${RED}${B}first_blood${R}  ${id}`)
       lines.push(`   ${data.recipient}${isMe}  @${mins(data.eventTime as number)}`)
       break
     }
 
     case "kill": {
-      const killing  = data.isMeKilling  ? `  ${GREEN}← VOCÊ MATOU${R}` : ""
-      const dying    = data.isMeDying    ? `  ${RED}← VOCÊ MORREU${R}` : ""
-      const assisting = data.isMeAssisting ? `  ${CYAN}← SUA ASSIST${R}` : ""
+      const killing  = data.isMeKilling  ? `  ${GREEN}â† VOCÃŠ MATOU${R}` : ""
+      const dying    = data.isMeDying    ? `  ${RED}â† VOCÃŠ MORREU${R}` : ""
+      const assisting = data.isMeAssisting ? `  ${CYAN}â† SUA ASSIST${R}` : ""
       const assists  = (data.assisters as string[]).length ? ` (assists: ${(data.assisters as string[]).join(", ")})` : ""
-      lines.push(`${ts()} ⚔️  ${WHITE}${B}kill${R}  ${id}`)
-      lines.push(`   ${data.killer} → ${data.victim}${assists}  @${mins(data.eventTime as number)}${killing}${dying}${assisting}`)
+      lines.push(`${ts()} âš”ï¸  ${WHITE}${B}kill${R}  ${id}`)
+      lines.push(`   ${data.killer} â†’ ${data.victim}${assists}  @${mins(data.eventTime as number)}${killing}${dying}${assisting}`)
       break
     }
 
     case "multikill": {
-      lines.push(`${ts()} 🔥 ${YELLOW}${B}multikill${R}  ${id}`)
+      lines.push(`${ts()} ðŸ”¥ ${YELLOW}${B}multikill${R}  ${id}`)
       lines.push(`   ${B}${data.label}${R} por ${data.killer}  @${mins(data.eventTime as number)}`)
       break
     }
 
     case "objective": {
       const icons: Record<string, string> = {
-        dragon: "🐉", baron: "🟣", herald: "🔮",
-        tower: "🏰", inhibitor: "💎", ace: "💀",
-        void_grub: "🪱", atakhan: "🩸",
+        dragon: "ðŸ‰", baron: "ðŸŸ£", herald: "ðŸ”®",
+        tower: "ðŸ°", inhibitor: "ðŸ’Ž", ace: "ðŸ’€",
+        void_grub: "ðŸª±", atakhan: "ðŸ©¸",
       }
-      const icon = icons[data.type as string] ?? "🎯"
+      const icon = icons[data.type as string] ?? "ðŸŽ¯"
       const stolen = data.stolen ? ` ${RED}ROUBADO${R}` : ""
       const dragon = data.dragonType ? ` (${data.dragonType})` : ""
       lines.push(`${ts()} ${icon} ${MAGENTA}${B}objective: ${data.type}${R}${dragon}  ${id}`)
@@ -185,55 +240,60 @@ function fmt(event_type: string, puuid: string, data: Record<string, unknown>): 
     }
 
     case "scoreboard": {
-      const tg = data.teamGold as { order: number; chaos: number; difference: number; leading: string }
+      const tg = data.teamGold as { order: number; chaos: number; difference: number; leading: string } | undefined
       const players = data.players as Array<{
         summonerName: string; championName: string; team: string
         level: number; kills: number; deaths: number; assists: number
-        cs: number; netWorth: number; isMe: boolean
+        cs: number; netWorth?: number; isMe: boolean
         items: Array<{ id: number; name: string }>
       }>
-      updateIonianBoots(players)
       const fmt_g = (n: number) => n.toLocaleString("pt-BR")
 
-      lines.push(`${ts()} 💰 ${YELLOW}${B}scoreboard${R}  ${id}`)
-      lines.push(
-        `   🔵 ORDER ${B}${fmt_g(tg.order)}g${R}` +
-        `   ${tg.leading === "ORDER" ? GREEN : RED}▲ ${fmt_g(tg.difference)}g${R}` +
-        `   ${B}${fmt_g(tg.chaos)}g${R} CHAOS 🔴`
-      )
-      lines.push(`   ${"─".repeat(60)}`)
+      lines.push(`${ts()} ðŸ’° ${YELLOW}${B}scoreboard${R}  ${id}`)
+      if (tg) {
+        lines.push(
+          `   ORDER ${B}${fmt_g(tg.order)}g${R}` +
+          `   ${tg.leading === "ORDER" ? GREEN : RED}+${fmt_g(tg.difference)}g${R}` +
+          `   ${B}${fmt_g(tg.chaos)}g${R} CHAOS`
+        )
+      }
+      lines.push(`   ${"â”€".repeat(60)}`)
 
       const order = players.filter(p => p.team === "ORDER")
       const chaos = players.filter(p => p.team === "CHAOS")
 
-      const fmtPlayer = (p: typeof players[0], side: "left" | "right") => {
-        const me = p.isMe ? ` ${YELLOW}◀${R}` : ""
+      const fmtPlayer = (p: typeof players[0]) => {
+        const me = p.isMe ? ` ${YELLOW}â—€${R}` : ""
         const kda = `${GREEN}${p.kills}/${p.deaths}/${p.assists}${R}`
-        const worth = `${YELLOW}${fmt_g(p.netWorth)}g${R}`
         const name = `${B}${p.championName.padEnd(12)}${R}`
-        return `${name} Lv${p.level} KDA ${kda}  CS ${String(p.cs).padStart(3)}  ${worth}${me}`
+        const worth = Number.isFinite(p.netWorth) ? `  ${YELLOW}${fmt_g(p.netWorth!)}g${R}` : ""
+        const items = p.items?.length ? `  Items: ${p.items.map(i => i.name || i.id).join(", ")}` : ""
+        return `${name} Lv${p.level} KDA ${kda}  CS ${String(p.cs).padStart(3)}${worth}${me}${items}`
       }
 
       const maxLen = Math.max(order.length, chaos.length)
       for (let i = 0; i < maxLen; i++) {
         const o = order[i]
         const c = chaos[i]
-        const left  = o ? `  🔵 ${fmtPlayer(o, "left")}` : ""
-        const right = c ? `  🔴 ${fmtPlayer(c, "right")}` : ""
+        const left  = o ? `  ðŸ”µ ${fmtPlayer(o)}` : ""
+        const right = c ? `  ðŸ”´ ${fmtPlayer(c)}` : ""
         lines.push(left)
         lines.push(right)
       }
       break
     }
 
+    case "raw_lol_event": {
+      return ""
+    }
     case "game_end": {
-      lines.push(`${ts()} 🏁 ${GRAY}${B}game_end${R}  ${id}`)
-      lines.push(`   Duração: ${mins(data.gameTime as number)}`)
+      lines.push(`${ts()} ðŸ ${GRAY}${B}game_end${R}  ${id}`)
+      lines.push(`   DuraÃ§Ã£o: ${mins(data.gameTime as number)}`)
       break
     }
 
     default: {
-      lines.push(`${ts()} •  ${DIM}${event_type}${R}  ${id}`)
+      lines.push(`${ts()} â€¢  ${DIM}${event_type}${R}  ${id}`)
       lines.push(`   ${JSON.stringify(data).slice(0, 100)}`)
     }
   }
@@ -241,80 +301,7 @@ function fmt(event_type: string, puuid: string, data: Record<string, unknown>): 
   return lines.join("\n")
 }
 
-// ─── Flash timer ─────────────────────────────────────────────────────────────
-
-const FLASH_ID      = 4
-const IONIAN_ID     = 3158
-const FLASH_BASE_CD = 300   // segundos
-
-interface FlashState {
-  key:          string        // "1"–"5"
-  summonerName: string
-  cd:           number        // CD efetivo em segundos
-  usedAt:       number | null // Date.now() quando usado, null = disponível
-}
-
-const flashStates: FlashState[] = []
-
-function cdSecs(ms: number) {
-  const s = Math.max(0, Math.ceil(ms / 1000))
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`
-}
-
-function printFlashStatus() {
-  if (flashStates.length === 0) {
-    console.log(`\n${GRAY}Sem dados de Flash — aguardando loading_analysis${R}\n`)
-    return
-  }
-  const now = Date.now()
-  console.log(`\n${B}⚡ Flash inimigos:${R}`)
-  for (const f of flashStates) {
-    if (f.usedAt === null) {
-      console.log(`  [${f.key}] ${GREEN}${B}DISPONÍVEL${R}  ${f.summonerName}`)
-    } else {
-      const rem = f.cd * 1000 - (now - f.usedAt)
-      console.log(`  [${f.key}] ${RED}${B}${cdSecs(rem)}${R}  ${f.summonerName}`)
-    }
-  }
-  console.log()
-}
-
-function markFlash(key: string) {
-  const f = flashStates.find(s => s.key === key)
-  if (!f) return
-  if (f.usedAt !== null) {
-    // Segunda pressão = resetar para disponível
-    f.usedAt = null
-    console.log(`\n${ts()} ⚡ ${GREEN}Flash ${B}${f.summonerName}${R}${GREEN} → DISPONÍVEL (reset manual)${R}\n`)
-    return
-  }
-  f.usedAt = Date.now()
-  const boot = f.cd < FLASH_BASE_CD ? ` ${DIM}(Ionian Boots: ${cdSecs(f.cd * 1000)})${R}` : ` ${DIM}(5:00)${R}`
-  console.log(`\n${ts()} ⚡ ${RED}Flash usado: ${B}${f.summonerName}${R}${boot}\n`)
-}
-
-// Atualiza CD se Ionian Boots detectado no scoreboard
-function updateIonianBoots(players: Array<{ summonerName: string; items: Array<{ id: number }> }>) {
-  for (const f of flashStates) {
-    const p = players.find(pl => pl.summonerName === f.summonerName)
-    if (!p) continue
-    const hasIonian = p.items.some(i => i.id === IONIAN_ID)
-    f.cd = hasIonian ? Math.round(FLASH_BASE_CD * 0.9) : FLASH_BASE_CD
-  }
-}
-
-// Tick a cada segundo: verifica se algum flash ficou disponível
-setInterval(() => {
-  const now = Date.now()
-  for (const f of flashStates) {
-    if (f.usedAt !== null && now - f.usedAt >= f.cd * 1000) {
-      f.usedAt = null
-      console.log(`\n${ts()} ⚡ ${GREEN}${B}Flash DISPONÍVEL: ${f.summonerName}${R} → pressione [${f.key}] para marcar novo uso\n`)
-    }
-  }
-}, 1_000)
-
-// ─── Usuários online ──────────────────────────────────────────────────────────
+// â”€â”€â”€ UsuÃ¡rios online â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface PresenceState {
   gameName: string
@@ -331,7 +318,7 @@ function printOnlineStatus() {
     console.log(`\n${GRAY}Nenhum agent online agora${R}\n`)
     return
   }
-  console.log(`\n${B}🟢 Agents online (${onlineUsers.size}):${R}`)
+  console.log(`\n${B}ðŸŸ¢ Agents online (${onlineUsers.size}):${R}`)
   for (const [puuid, u] of onlineUsers) {
     const name  = u.gameName ? `${CYAN}${B}${u.gameName}#${u.tagLine}${R}` : `${GRAY}${puuid.slice(0, 8)}...${R}`
     const phase = u.phase === "LoLClosed"
@@ -342,7 +329,7 @@ function printOnlineStatus() {
   console.log()
 }
 
-// ─── Teclado ──────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Teclado â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 readline.emitKeypressEvents(process.stdin)
 if (process.stdin.isTTY) process.stdin.setRawMode(true)
@@ -350,19 +337,16 @@ if (process.stdin.isTTY) process.stdin.setRawMode(true)
 process.stdin.on("keypress", (_ch: string, key: { name: string; ctrl: boolean }) => {
   if (!key) return
   if (key.ctrl && key.name === "c") process.exit()
-  if (key.name === "f") { printFlashStatus(); return }
   if (key.name === "p") { printOnlineStatus(); return }
-  const n = parseInt(key.name)
-  if (n >= 1 && n <= 5) markFlash(String(n))
 })
 
-// ─── Supabase ─────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Supabase â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
-console.log(`\n${B}lol-agent watcher${R} — aguardando eventos`)
-console.log(`${DIM}⚡ Flash: [1-5] marcar uso  [f] ver status  [p] agents online${R}\n`)
+console.log(`\n${B}lol-agent watcher${R} â€” aguardando eventos`)
+console.log(`${DIM}[p] agents online${R}\n`)
 
-// Presença — quem está rodando o agent agora
+// PresenÃ§a â€” quem estÃ¡ rodando o agent agora
 const presenceChan = supabase.channel("idv-agent-presence")
 
 function syncPresenceState(logChanges = false) {
@@ -388,15 +372,15 @@ function syncPresenceState(logChanges = false) {
     if (logChanges && wasOnline && previous?.phase !== user.phase) {
       const name = user.gameName ? `${CYAN}${B}${user.gameName}#${user.tagLine}${R}` : puuid.slice(0, 8)
       if (user.phase === "LoLClosed") {
-        console.log(`\n${ts()} 🔌 ${RED}League Client fechado:${R} ${name} ${GRAY}(agent ainda online)${R}\n`)
+        console.log(`\n${ts()} ðŸ”Œ ${RED}League Client fechado:${R} ${name} ${GRAY}(agent ainda online)${R}\n`)
       } else if (previous?.phase === "LoLClosed") {
-        console.log(`\n${ts()} 🔁 ${GREEN}League Client voltou:${R} ${name} ${YELLOW}[${user.phase}]${R}\n`)
+        console.log(`\n${ts()} ðŸ” ${GREEN}League Client voltou:${R} ${name} ${YELLOW}[${user.phase}]${R}\n`)
       }
     }
 
     if (logChanges && !wasOnline) {
       const name = user.gameName ? `${CYAN}${B}${user.gameName}#${user.tagLine}${R}` : puuid.slice(0, 8)
-      console.log(`\n${ts()} 🟢 ${GREEN}Agent online:${R} ${name}\n`)
+      console.log(`\n${ts()} ðŸŸ¢ ${GREEN}Agent online:${R} ${name}\n`)
     }
   }
 
@@ -413,7 +397,7 @@ function syncPresenceState(logChanges = false) {
 
       onlineUsers.delete(puuid)
       const name = user.gameName ? `${CYAN}${B}${user.gameName}#${user.tagLine}${R}` : puuid.slice(0, 8)
-      console.log(`\n${ts()} 🔴 ${GRAY}Agent offline:${R} ${name}\n`)
+      console.log(`\n${ts()} ðŸ”´ ${GRAY}Agent offline:${R} ${name}\n`)
     }, 15_000)
 
     offlineTimers.set(puuid, timer)
@@ -433,7 +417,7 @@ presenceChan
   .subscribe((status) => {
     if (status === "SUBSCRIBED") {
       syncPresenceState()
-      console.log(`${GREEN}✓ Presença conectada${onlineUsers.size > 0 ? ` — ${onlineUsers.size} online` : ""}${R}`)
+      console.log(`${GREEN}âœ“ PresenÃ§a conectada${onlineUsers.size > 0 ? ` â€” ${onlineUsers.size} online` : ""}${R}`)
     }
   })
 
@@ -445,30 +429,21 @@ supabase
     (payload) => {
       const row = payload.new as { puuid: string; event_type: string; data: Record<string, unknown> }
 
-      // Inicializa flash timer fora do fmt() para não sujar a função de formatação
-      if (row.event_type === "loading_analysis") {
-        const rawEnemy = (row.data.enemyTeam as Array<{ summonerName: string; spell1Id: number; spell2Id: number }>) ?? []
-        const withFlash = rawEnemy.filter(p => p.spell1Id === FLASH_ID || p.spell2Id === FLASH_ID)
-        flashStates.length = 0
-        withFlash.forEach((p, i) => flashStates.push({
-          key: String(i + 1), summonerName: p.summonerName, cd: FLASH_BASE_CD, usedAt: null,
-        }))
-        if (flashStates.length) {
-          console.log(`\n${CYAN}${B}⚡ Flash mapeado:${R}`)
-          for (const f of flashStates) console.log(`  [${f.key}] ${f.summonerName}`)
+      try {
+        const formatted = fmt(row.event_type, row.puuid, row.data)
+        if (formatted) {
+          console.log(formatted)
           console.log()
         }
-      }
-
-      try {
-        console.log(fmt(row.event_type, row.puuid, row.data))
-        console.log()
       } catch (e) {
         console.error(`[watcher] Erro ao formatar ${row.event_type}:`, e)
       }
     }
   )
   .subscribe((status) => {
-    if (status === "SUBSCRIBED") console.log(`${GREEN}✓ Conectado — monitorando live_game_events${R}\n`)
-    else if (status === "CHANNEL_ERROR") console.error(`${RED}✗ Erro Supabase Realtime${R}`)
+    if (status === "SUBSCRIBED") console.log(`${GREEN}âœ“ Conectado â€” monitorando live_game_events${R}\n`)
+    else if (status === "CHANNEL_ERROR") {
+      console.error(`${RED}âœ— Erro Supabase Realtime; reiniciando watcher${R}`)
+      process.exit(1)
+    }
   })
