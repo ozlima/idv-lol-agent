@@ -479,12 +479,22 @@ function html() {
     .metric label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
     .metric strong { font-size: 18px; }
     .gold-chart {
+      position: relative;
       margin-top: 12px;
       height: 160px;
       border: 1px solid var(--line);
       border-radius: 6px;
       background: #0e1114;
       overflow: hidden;
+      cursor: crosshair;
+    }
+    .gc-indicator {
+      position: absolute;
+      top: 0; bottom: 0;
+      width: 1px;
+      background: rgba(255,255,255,.28);
+      pointer-events: none;
+      display: none;
     }
     .gold-chart svg { display: block; width: 100%; height: 100%; }
     .gold-chart .area.blue { fill: rgba(100,168,255,.14); }
@@ -634,6 +644,7 @@ function html() {
   <script>
     let state = null
     let selectedPuuid = ""
+    let _gcData = null
     const $ = (id) => document.getElementById(id)
     const esc = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]))
     const fmt = (sec) => {
@@ -716,6 +727,7 @@ function html() {
       const clean = (points || []).filter(p => Number.isFinite(Number(p.gameTime)) && Number.isFinite(Number(p.signedGold)))
       if (clean.length < 2) {
         el.innerHTML = '<div class="empty" style="padding:16px">Aguardando snapshots 5x5 para grafico de gold</div>'
+        _gcData = null
         return
       }
 
@@ -723,12 +735,11 @@ function html() {
       const padL = 38, padR = 10, padT = 16, padB = 16
       const cW = W - padL - padR, cH = H - padT - padB
       const mid = padT + cH / 2
-
       const minT = clean[0].gameTime, maxT = clean[clean.length - 1].gameTime
       const maxAbs = Math.max(1000, ...clean.map(p => Math.abs(Number(p.signedGold))))
-
       const xf = t => padL + ((t - minT) / Math.max(1, maxT - minT)) * cW
       const yf = g => mid - (g / maxAbs) * (cH / 2)
+      const fmtK = v => v >= 1000 ? (v / 1000).toFixed(1).replace(/\.0$/, "") + "k" : String(Math.round(v))
 
       // Split into segments at each zero crossing
       const segs = []
@@ -753,40 +764,93 @@ function html() {
       ).join(" ")
 
       let out = ""
-
-      // Zero axis
       out += '<line x1="' + padL + '" y1="' + mid.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + mid.toFixed(1) + '" stroke="rgba(255,255,255,.2)" stroke-width="1"/>'
 
-      // Draw area fills first, then lines on top — inline attrs to avoid CSS conflicts
       for (const s of segs) {
         if (s.pts.length < 2) continue
         const d = mkD(s.pts)
         const x0 = xf(s.pts[0].gameTime).toFixed(1)
         const xN = xf(s.pts[s.pts.length - 1].gameTime).toFixed(1)
-        const areaFill = s.pos ? "rgba(100,168,255,.15)" : "rgba(255,107,107,.15)"
-        out += '<path fill="' + areaFill + '" stroke="none" d="' + d + ' L' + xN + ' ' + mid.toFixed(1) + ' L' + x0 + ' ' + mid.toFixed(1) + ' Z"/>'
+        const fill = s.pos ? "rgba(100,168,255,.15)" : "rgba(255,107,107,.15)"
+        out += '<path fill="' + fill + '" stroke="none" d="' + d + ' L' + xN + ' ' + mid.toFixed(1) + ' L' + x0 + ' ' + mid.toFixed(1) + ' Z"/>'
       }
       for (const s of segs) {
         if (s.pts.length < 2) continue
-        const lineColor = s.pos ? "#64a8ff" : "#ff6b6b"
-        out += '<path fill="none" stroke="' + lineColor + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="' + mkD(s.pts) + '"/>'
+        const stroke = s.pos ? "#64a8ff" : "#ff6b6b"
+        out += '<path fill="none" stroke="' + stroke + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="' + mkD(s.pts) + '"/>'
       }
 
-      // Dot at last point
       const last = clean[clean.length - 1]
       const lx = xf(last.gameTime).toFixed(1), ly = yf(Number(last.signedGold)).toFixed(1)
       const dc = Number(last.signedGold) >= 0 ? "#64a8ff" : "#ff6b6b"
       out += '<circle cx="' + lx + '" cy="' + ly + '" r="5" fill="' + dc + '" opacity=".18"/>'
       out += '<circle cx="' + lx + '" cy="' + ly + '" r="2.5" fill="' + dc + '"/>'
 
-      // Y-axis labels (separate non-stretched SVG overlay via foreignObject)
-      const fmtK = v => v >= 1000 ? (v / 1000).toFixed(1).replace(/\.0$/, "") + "k" : String(Math.round(v))
       const lbl = (y, txt) => '<text text-anchor="end" x="' + (padL - 5) + '" y="' + y + '" dy=".35em" fill="rgba(255,255,255,.38)" font-size="10" font-family="Inter,sans-serif">' + txt + "</text>"
       out += lbl(padT + 2, "+" + fmtK(maxAbs))
       out += lbl(mid, "0")
       out += lbl(H - padB - 2, "-" + fmtK(maxAbs))
 
-      el.innerHTML = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">' + out + "</svg>"
+      el.innerHTML = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">' + out + '</svg><div class="gc-indicator"></div>'
+
+      _gcData = { clean, xf, W, padL, cW }
+
+      // Create tooltip once
+      if (!document.getElementById("gc-tip")) {
+        const tip = document.createElement("div")
+        tip.id = "gc-tip"
+        tip.style.cssText = "position:fixed;display:none;pointer-events:none;z-index:999;background:#1a1e22;border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:5px 10px;font-size:12px;white-space:nowrap;box-shadow:0 4px 16px rgba(0,0,0,.5);"
+        document.body.appendChild(tip)
+      }
+
+      el.onmousemove = function(e) {
+        if (!_gcData) return
+        const { clean, xf, W, padL, cW } = _gcData
+        const rect = el.getBoundingClientRect()
+        const svgX = (e.clientX - rect.left) / rect.width * W
+        const ind = el.querySelector(".gc-indicator")
+        const tip = document.getElementById("gc-tip")
+
+        if (svgX < padL || svgX > padL + cW) {
+          if (ind) ind.style.display = "none"
+          if (tip) tip.style.display = "none"
+          return
+        }
+
+        const minT = clean[0].gameTime, maxT = clean[clean.length - 1].gameTime
+        const hoverT = minT + (svgX - padL) / cW * (maxT - minT)
+        const pt = clean.reduce((a, b) =>
+          Math.abs(Number(b.gameTime) - hoverT) < Math.abs(Number(a.gameTime) - hoverT) ? b : a
+        )
+
+        const g = Number(pt.signedGold)
+        const color = g >= 0 ? "#64a8ff" : "#ff6b6b"
+        const sign = g > 0 ? "+" : ""
+        const gt = Number(pt.gameTime)
+        const mm = Math.floor(gt / 60)
+        const ss = String(Math.floor(gt % 60)).padStart(2, "0")
+
+        if (ind) {
+          ind.style.display = "block"
+          ind.style.left = ((xf(Number(pt.gameTime)) / W) * rect.width).toFixed(1) + "px"
+        }
+
+        if (tip) {
+          tip.style.display = "block"
+          tip.style.left = (e.clientX + 14) + "px"
+          tip.style.top = (e.clientY - 16) + "px"
+          tip.innerHTML =
+            '<span style="color:' + color + ';font-weight:700">' + sign + Math.round(g).toLocaleString("pt-BR") + 'g</span>' +
+            ' <span style="color:rgba(255,255,255,.4);font-size:11px">' + mm + ":" + ss + "</span>"
+        }
+      }
+
+      el.onmouseleave = function() {
+        const ind = el.querySelector(".gc-indicator")
+        if (ind) ind.style.display = "none"
+        const tip = document.getElementById("gc-tip")
+        if (tip) tip.style.display = "none"
+      }
     }
 
     function renderPostGameAnalysis(post) {
