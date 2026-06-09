@@ -1,5 +1,6 @@
 import { getGameflowSession, getRankedStats, getSummonerByPuuid } from "./lcu.js"
 import { publishEvent } from "./publisher.js"
+import { riotGetPlayerData, isRiotApiAvailable } from "./riot-api.js"
 
 // ─── MMR estimation ───────────────────────────────────────────────────────────
 // Valores baseados na distribuição histórica do servidor BR1/NA1
@@ -165,6 +166,48 @@ export async function analyzeLoadingScreen(myPuuid: string, attempt = 1): Promis
       hasSummonerData: !!summoner,
     }
   }))
+
+  // ─── Riot API fallback para dados incompletos ─────────────────────────────
+  const incomplete = playerData.filter(p => p.level === null || !p.hasRankedData)
+  if (incomplete.length > 0) {
+    if (isRiotApiAvailable()) {
+      console.log(`[loading] ${incomplete.length} jogador(es) sem dados completos via LCU — tentando Riot API...`)
+      for (const p of incomplete) {
+        const idx      = playerData.indexOf(p)
+        const riotData = await riotGetPlayerData(p.puuid)
+        if (!riotData) continue
+
+        const level    = riotData.level ?? p.level
+        const useRiot  = riotData.tier !== "UNRANKED"
+        const tier     = useRiot ? riotData.tier     : p.elo.tier
+        const division = useRiot ? riotData.division : p.elo.division
+        const lp       = useRiot ? riotData.lp       : p.elo.lp
+        const wins     = useRiot ? riotData.wins     : p.elo.wins
+        const losses   = useRiot ? riotData.losses   : p.elo.losses
+        const total    = wins + losses
+        const rawWr    = total > 0 ? wins / total * 100 : 0
+        const wr       = total > 0 ? +(Math.min(100, Math.max(0, rawWr)).toFixed(1)) : 0
+        const reliableWinRate = total > 0 && wins <= total && rawWr <= 100
+        const isUnranked = tier === "UNRANKED"
+        const mmr      = isUnranked ? 800 : estimateMMR(tier, division, lp)
+        const smurfFlags = detectSmurfFlags(level, mmr, wins, losses, isUnranked)
+
+        playerData[idx] = {
+          ...p,
+          level,
+          elo: { tier, division, lp, wins, losses, winRate: wr, totalGames: total, reliableWinRate, label: eloLabel(tier, division, lp) },
+          mmr,
+          smurfFlags,
+          isUnranked,
+          hasRankedData:   useRiot || p.hasRankedData,
+          hasSummonerData: riotData.level !== null || p.hasSummonerData,
+        }
+        console.log(`[loading] Riot API fallback OK para ${p.summonerName}`)
+      }
+    } else {
+      console.log(`[loading] ${incomplete.length} jogador(es) sem dados completos — RIOT_API_KEY não configurado, sem fallback`)
+    }
+  }
 
   const myTeam    = playerData.filter(p => p.isAlly)
   const enemyTeam = playerData.filter(p => !p.isAlly)
