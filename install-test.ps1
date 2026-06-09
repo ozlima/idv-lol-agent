@@ -105,6 +105,10 @@ function Download-Agent {
 function Install-Agent {
   Step "Configurando ambiente..."
   $env:PATH = "$NodeDir;$env:PATH"
+  $env:NPM_CONFIG_UPDATE_NOTIFIER = "false"
+  $env:NPM_CONFIG_FUND = "false"
+  $env:NPM_CONFIG_AUDIT = "false"
+  $env:NPM_CONFIG_LOGLEVEL = "error"
   Set-Content -LiteralPath (Join-Path $AgentDir ".env") -Value "SUPABASE_URL=$SupabaseUrl`r`nSUPABASE_ANON_KEY=$SupabaseAnonKey" -Encoding UTF8
 
   Step "Instalando pacotes npm..."
@@ -113,10 +117,23 @@ function Install-Agent {
     "IDV Tracker install-test" | Set-Content -LiteralPath $InstallLog -Encoding UTF8
     "node: $(& node.exe -v 2>&1)" | Add-Content -LiteralPath $InstallLog -Encoding UTF8
     "npm: $(& npm.cmd -v 2>&1)" | Add-Content -LiteralPath $InstallLog -Encoding UTF8
-    & npm.cmd install --no-audit --no-fund *>> $InstallLog
-    if ($LASTEXITCODE -ne 0) {
-      $tail = (Get-Content -LiteralPath $InstallLog -Tail 20) -join "`n"
-      throw "Falha ao instalar pacotes npm. Log: $InstallLog`n$tail"
+    "" | Add-Content -LiteralPath $InstallLog -Encoding UTF8
+
+    "Tentando npm ci..." | Add-Content -LiteralPath $InstallLog -Encoding UTF8
+    & npm.cmd ci --omit=dev --no-audit --no-fund --loglevel=error *>> $InstallLog
+    $npmExit = $LASTEXITCODE
+
+    if ($npmExit -ne 0) {
+      "" | Add-Content -LiteralPath $InstallLog -Encoding UTF8
+      "npm ci falhou com codigo $npmExit. Tentando npm install..." | Add-Content -LiteralPath $InstallLog -Encoding UTF8
+      & npm.cmd install --omit=dev --no-audit --no-fund --loglevel=error *>> $InstallLog
+      $npmExit = $LASTEXITCODE
+    }
+
+    if ($npmExit -ne 0) {
+      $tail = (Get-Content -LiteralPath $InstallLog -Tail 80 | Where-Object { $_ -notmatch '^npm notice' }) -join "`n"
+      if (-not $tail.Trim()) { $tail = "Sem erro detalhado no tail. Veja o install.log completo." }
+      throw "Falha ao instalar pacotes npm (codigo $npmExit). Log: $InstallLog`n$tail"
     }
   } finally {
     Pop-Location
