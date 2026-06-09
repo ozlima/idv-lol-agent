@@ -939,8 +939,9 @@ function html() {
         const pick = entry.championName || (a.championId ? "Campeao pendente" : "-")
         const intent = c.pickIntentName || (c.pickIntentId ? "ID " + c.pickIntentId : "")
         const highGoldClass = isSameLivePlayer(l, highGold) ? " high-gold" : ""
+        const youBadge = entry.isMe ? ' <span style="color:var(--yellow);font-size:11px;font-weight:700">(você)</span>' : ''
         rows.push(
-          '<div class="champ-card' + highGoldClass + '"><div class="champ-main"><div><div class="champ-name">' + esc(pick) + '</div><div class="sub">' + esc(entry.summonerName) + (intent ? ' · intencao ' + esc(intent) : '') + '</div></div><span class="pill ' + (side === "ALLY" ? "blue" : "red") + '">' + esc(entry.roleLabel) + '</span></div>' +
+          '<div class="champ-card' + highGoldClass + '"><div class="champ-main"><div><div class="champ-name">' + esc(pick) + youBadge + '</div><div class="sub">' + esc(entry.summonerName) + (intent ? ' · intencao ' + esc(intent) : '') + '</div></div><span class="pill ' + (side === "ALLY" ? "blue" : "red") + '">' + esc(entry.roleLabel) + '</span></div>' +
           '<div class="champ-meta">' +
           renderMetricDiff("Elo", a.mmr, oppAnalysis.mmr, 0, "", a.elo?.label) +
           renderMetricDiff("Gold", l?.netWorth, oppLive.netWorth, 0, "g") +
@@ -1007,6 +1008,7 @@ function html() {
           championName,
           summonerName: bestSummonerName(a.summonerName, l?.summonerName, championName, a.puuid || c.puuid),
           originalIndex: index,
+          isMe: !!(l?.isMe || c?.isMe || a?.isMe),
         }
     }
 
@@ -1201,9 +1203,18 @@ function html() {
       const analysis = loading.analysis || {}
       for (const s of analysis.streakAlerts || []) {
         const player = enrichAlertPlayer(s, loading, champSelect, scoreboard)
+        const isMe = !!(player.isMe && s.team === "ALLY")
+        const name = meOrName(isMe, player.summonerName)
+        const key = (s.team || "") + s.count + s.type + (player.summonerName || "")
+        const winTitles = isMe
+          ? ["Você em sequência: " + s.count + " vitórias", "Você tá quente (" + s.count + "W)", "Você em " + s.count + " wins seguidas"]
+          : [name + " em sequência: " + s.count + " vitórias", name + " tá quente (" + s.count + "W)", name + " em " + s.count + " wins seguidas"]
+        const lossTitles = isMe
+          ? ["Você em " + s.count + " derrotas — foco", "Você pode estar tilted (" + s.count + "L)", s.count + " losses seguidas: mentalize"]
+          : [name + " em " + s.count + " derrotas seguidas", name + " pode estar tilted (" + s.count + "L)", s.count + " losses: " + name]
         out.push({
           kind: s.team === "ALLY" ? "blue" : "red",
-          title: player.summonerName + " em " + s.count + (s.type === "win" ? " wins" : " losses"),
+          title: pickStable(s.type === "win" ? winTitles : lossTitles, key),
           detail: (s.team === "ALLY" ? "Aliado" : "Inimigo") + " - ultimas: " + (s.recent || []).join(""),
         })
       }
@@ -1211,9 +1222,15 @@ function html() {
         const player = enrichAlertPlayer(s, loading, champSelect, scoreboard)
         const flags = sanitizedSmurfFlags(player)
         if (!flags.length) continue
+        const isMe = !!(player.isMe && s.team === "ALLY")
+        const name = meOrName(isMe, player.summonerName)
+        const key = "smurf" + (s.team || "") + (player.summonerName || "")
+        const titles = isMe
+          ? ["Seu histórico é suspeito", "Flags de smurf: você"]
+          : ["Possível smurf: " + name, name + " parece smurf", "Smurf alert: " + name]
         out.push({
           kind: s.team === "ALLY" ? "blue" : "red",
-          title: "Possivel smurf: " + player.summonerName,
+          title: pickStable(titles, key),
           detail: (s.team === "ALLY" ? "Aliado" : "Inimigo") + " - " + (validAccountLevel(player.level) ? "Lv " + player.level : "Lv ?") + " - ~" + player.mmr + " MMR - " + flags.map(f => f.label).join(", "),
         })
       }
@@ -1223,18 +1240,30 @@ function html() {
         const team = (loading.myTeam || []).includes(p) ? "ALLY" : "ENEMY"
         if (total >= 10 && total < 120 && wr >= 62) {
           const player = enrichAlertPlayer({ ...p, team }, loading, champSelect, scoreboard)
+          const isMe = !!(player.isMe && team === "ALLY")
+          const name = meOrName(isMe, player.summonerName)
+          const key = "wr" + (team || "") + (player.summonerName || "") + Math.floor(wr)
+          const titles = isMe
+            ? ["Você tá quente: " + wr + "%WR", "Win rate alto — você · " + wr + "% em " + total + "j"]
+            : ["Win rate alto: " + name, name + " tá quente: " + wr + "%WR", name + " · " + wr + "% em " + total + "j"]
           out.push({
             kind: team === "ALLY" ? "blue" : "red",
-            title: "Win rate alto: " + player.summonerName,
-            detail: (p.isMe ? "Voce" : "Jogador") + " - " + wr + "% WR em " + total + " jogos",
+            title: pickStable(titles, key),
+            detail: (isMe ? "Você" : (team === "ALLY" ? "Aliado" : "Inimigo")) + " - " + wr + "% WR em " + total + " jogos",
           })
         }
       }
       for (const a of analysis.autofillSuspects || []) {
         const player = enrichAlertPlayer(a, loading, champSelect, scoreboard)
+        const isMe = !!(player.isMe && a.team === "ALLY")
+        const name = meOrName(isMe, player.summonerName)
+        const key = "auto" + (a.team || "") + (player.summonerName || "")
+        const titles = isMe
+          ? ["Você pode estar off-role", "Autofill possível — você"]
+          : ["Autofill provável: " + name, name + " pode estar off-role", "Off-role: " + name]
         out.push({
           kind: a.team === "ALLY" ? "blue" : "red",
-          title: "Autofill possivel: " + player.summonerName,
+          title: pickStable(titles, key),
           detail: (a.team === "ALLY" ? "Aliado" : "Inimigo") + " - " + a.assignedPosition + " - spells " + (a.spells || []).join("/"),
         })
       }
@@ -1285,22 +1314,57 @@ function html() {
       const teamGold = scoreboard.teamGold || {}
       if (Number.isFinite(Number(teamGold.difference)) && me.team && gameTime >= 30) {
         const signedGold = teamGold.leading === me.team ? Number(teamGold.difference) : -Number(teamGold.difference)
-        if (signedGold >= 2000) out.push({ kind: "blue", title: "Seu time + " + signedGold.toLocaleString("pt-BR") + "g", detail: "Vantagem geral no snapshot " + fmt(gameTime) })
-        if (signedGold <= -2000) out.push({ kind: "blue", title: "Seu time " + signedGold.toLocaleString("pt-BR") + "g", detail: "Desvantagem geral no snapshot " + fmt(gameTime) })
+        if (signedGold >= 2000) {
+          const key = "teamgold+" + Math.floor(signedGold / 500)
+          out.push({ kind: "blue", title: pickStable([
+            "Seu time +" + signedGold.toLocaleString("pt-BR") + "g — pressiona",
+            "Vantagem de " + signedGold.toLocaleString("pt-BR") + "g — hora dos objetivos",
+            "+" + signedGold.toLocaleString("pt-BR") + "g · aproveita a janela",
+          ], key), detail: "Snapshot " + fmt(gameTime) })
+        }
+        if (signedGold <= -2000) {
+          const abs = Math.abs(signedGold)
+          const key = "teamgold-" + Math.floor(abs / 500)
+          out.push({ kind: "blue", title: pickStable([
+            "Seu time -" + abs.toLocaleString("pt-BR") + "g — joga seguro",
+            "Desvantagem de " + abs.toLocaleString("pt-BR") + "g — evita fights",
+            "-" + abs.toLocaleString("pt-BR") + "g · recua e farma",
+          ], key), detail: "Snapshot " + fmt(gameTime) })
+        }
       }
 
       const allyCarry = topBy(ally, "netWorth")
       if (allyCarry && Number(allyCarry.netWorth) >= 12000) {
-        out.push({ kind: "blue", title: "Carry aliado forte: " + allyCarry.summonerName, detail: allyCarry.championName + " · " + Number(allyCarry.netWorth).toLocaleString("pt-BR") + "g" })
+        const isMe = !!(allyCarry.isMe)
+        const name = meOrName(isMe, allyCarry.summonerName)
+        const key = "carry" + (allyCarry.summonerName || allyCarry.championName || "")
+        const titles = isMe
+          ? ["Você tá farto — hora de fechar", "Você com maior gold — vai jogar", "Você dominando — hora de objetivos"]
+          : [name + " tá farto — joga em torno dele", "Carry sólido: " + name, name + " com maior gold — protege"]
+        out.push({ kind: "blue", title: pickStable(titles, key), detail: allyCarry.championName + " · " + Number(allyCarry.netWorth).toLocaleString("pt-BR") + "g" })
       }
+
       const enemyThreat = enemy.find(p => Number(p.kills ?? 0) >= 5 && Number(p.deaths ?? 0) <= 1)
       if (enemyThreat) {
-        out.push({ kind: "red", title: "Ameaca inimiga: " + enemyThreat.summonerName, detail: enemyThreat.championName + " · KDA " + enemyThreat.kills + "/" + enemyThreat.deaths + "/" + enemyThreat.assists })
+        const name = enemyThreat.summonerName
+        const key = "threat" + (name || enemyThreat.championName || "")
+        out.push({ kind: "red", title: pickStable([
+          name + " intocável — cuidado",
+          "Não enfrenta " + name + " agora",
+          "Atenção: " + name + " tá fed",
+          name + " — evita confronto direto",
+        ], key), detail: enemyThreat.championName + " · KDA " + enemyThreat.kills + "/" + enemyThreat.deaths + "/" + enemyThreat.assists })
       }
 
       for (const a of ally) {
         if (gameTime <= 360 && Number(a.deaths ?? 0) >= 2) {
-          out.push({ kind: "blue", title: a.summonerName + " morreu " + a.deaths + "x antes dos 6 min", detail: a.championName + " · early game em risco" })
+          const isMe = !!(a.isMe)
+          const name = meOrName(isMe, a.summonerName)
+          const key = "earlydeath" + (a.summonerName || a.championName || "")
+          const titles = isMe
+            ? ["Você já morreu " + a.deaths + "x — recua por ora", "Cuidado: você tá morrendo cedo (" + a.deaths + "x)"]
+            : [name + " morreu " + a.deaths + "x antes dos 6min", "Early difícil: " + name + " (" + a.deaths + " mortes)", name + " tá sofrendo cedo — " + a.deaths + "x"]
+          out.push({ kind: "blue", title: pickStable(titles, key), detail: a.championName + " · early game em risco" })
         }
       }
 
@@ -1309,27 +1373,55 @@ function html() {
         const aInfo = findAnalysisForLive(a, allyAnalysis, i)
         const enemyMatch = findEnemyMatch(aInfo, enemy, enemyAnalysis, i)
         if (!isComparablePair(a, enemyMatch)) continue
+        const isMe = !!(a.isMe)
+        const name = meOrName(isMe, a.summonerName)
 
         const goldDiff = Number(enemyMatch.netWorth) - Number(a.netWorth)
         if (goldDiff >= 2000) {
-          out.push({ kind: "blue", title: a.summonerName + " esta " + goldDiff.toLocaleString("pt-BR") + "g atras", detail: a.championName + " vs " + enemyMatch.championName + " · snapshot " + fmt(scoreboard.gameTime) })
+          const key = "gold-" + (a.summonerName || "") + Math.floor(goldDiff / 500)
+          const titles = isMe
+            ? ["Você " + goldDiff.toLocaleString("pt-BR") + "g atrás — joga seguro", "Gap de " + goldDiff.toLocaleString("pt-BR") + "g contra você — recua"]
+            : [name + " " + goldDiff.toLocaleString("pt-BR") + "g atrás do matchup", "Gap de gold: " + name + " perde " + goldDiff.toLocaleString("pt-BR") + "g", name + " tá perdendo por " + goldDiff.toLocaleString("pt-BR") + "g"]
+          out.push({ kind: "blue", title: pickStable(titles, key), detail: a.championName + " vs " + enemyMatch.championName + " · snapshot " + fmt(scoreboard.gameTime) })
         }
         const levelDiff = Number(enemyMatch.level) - Number(a.level)
         if (levelDiff >= 2) {
-          out.push({ kind: "blue", title: a.summonerName + " esta " + levelDiff + " niveis atras", detail: "Lv " + a.level + " contra Lv " + enemyMatch.level + " · snapshot " + fmt(scoreboard.gameTime) })
+          const key = "level-" + (a.summonerName || "") + levelDiff
+          const titles = isMe
+            ? ["Você " + levelDiff + " níveis atrás — cuidado no fight", "XP em queda: você Lv" + a.level + " vs Lv" + enemyMatch.level]
+            : [name + " " + levelDiff + " níveis atrás", "XP em queda: " + name + " Lv" + a.level + " vs Lv" + enemyMatch.level]
+          out.push({ kind: "blue", title: pickStable(titles, key), detail: "Lv " + a.level + " contra Lv " + enemyMatch.level + " · snapshot " + fmt(scoreboard.gameTime) })
         }
         const csDiff = Number(enemyMatch.cs) - Number(a.cs)
         if (csDiff >= 50) {
-          out.push({ kind: "blue", title: a.summonerName + " esta " + csDiff + " CS atras", detail: a.championName + " vs " + enemyMatch.championName + " · snapshot " + fmt(scoreboard.gameTime) })
+          const key = "cs-" + (a.summonerName || "") + Math.floor(csDiff / 10)
+          const titles = isMe
+            ? ["Você " + csDiff + " CS atrás — melhora o farm", "Farm ruim: você perde " + csDiff + " CS"]
+            : [name + " " + csDiff + " CS atrás", "Farm ruim: " + name + " perde " + csDiff + " CS", name + " · " + csDiff + " CS atrás do matchup"]
+          out.push({ kind: "blue", title: pickStable(titles, key), detail: a.championName + " vs " + enemyMatch.championName + " · snapshot " + fmt(scoreboard.gameTime) })
         }
         if (gameTime >= 600 && gameTime <= 780 && isBotLane(aInfo) && csDiff >= 30) {
-          out.push({ kind: "blue", title: "Bot lane " + csDiff + " CS atras aos 10 min", detail: a.championName + " vs " + enemyMatch.championName })
+          const key = "botcs" + Math.floor(csDiff / 10)
+          out.push({ kind: "blue", title: pickStable([
+            "Bot lane " + csDiff + " CS atrás aos 10min",
+            "Farm da bot em queda: -" + csDiff + " CS",
+            "Fase de farm perdida na bot: " + csDiff + " CS",
+          ], key), detail: a.championName + " vs " + enemyMatch.championName })
         }
         const itemDiff = itemCount(enemyMatch) - itemCount(a)
         if (itemDiff >= 2) {
-          out.push({ kind: "blue", title: a.summonerName + " com spike de item atrasado", detail: enemyMatch.championName + " tem +" + itemDiff + " itens no snapshot " + fmt(scoreboard.gameTime) })
+          const key = "item-" + (a.summonerName || "") + itemDiff
+          const titles = isMe
+            ? ["Você atrás em itens — spike atrasado", "Você sem spike ainda — " + enemyMatch.championName + " na frente"]
+            : [name + " com spike atrasado", name + " sem spike ainda", enemyMatch.championName + " tem +" + itemDiff + " itens sobre " + name]
+          out.push({ kind: "blue", title: pickStable(titles, key), detail: enemyMatch.championName + " tem +" + itemDiff + " itens · snapshot " + fmt(scoreboard.gameTime) })
         } else if (itemDiff <= -2) {
-          out.push({ kind: "blue", title: a.summonerName + " com spike de item", detail: a.championName + " tem +" + Math.abs(itemDiff) + " itens contra " + enemyMatch.championName })
+          const abs = Math.abs(itemDiff)
+          const key = "itemadv-" + (a.summonerName || "") + abs
+          const titles = isMe
+            ? ["Você com spike de item — aproveita agora", "Você +" + abs + " itens — janela aberta"]
+            : [name + " com spike de item", name + " com vantagem de itens", name + " +" + abs + " itens — aproveita a janela"]
+          out.push({ kind: "blue", title: pickStable(titles, key), detail: a.championName + " tem +" + abs + " itens contra " + enemyMatch.championName })
         }
       }
 
@@ -1338,8 +1430,22 @@ function html() {
       if (isComparablePair(allyJungle, enemyJungle)) {
         const jgLevel = Number(enemyJungle.level) - Number(allyJungle.level)
         const jgCs = Number(enemyJungle.cs) - Number(allyJungle.cs)
-        if (jgLevel >= 2) out.push({ kind: "blue", title: "Jungle aliado " + jgLevel + " niveis atras", detail: allyJungle.summonerName + " vs " + enemyJungle.summonerName })
-        if (jgCs >= 20) out.push({ kind: "blue", title: "Jungle aliado " + jgCs + " CS atras", detail: allyJungle.summonerName + " vs " + enemyJungle.summonerName })
+        const isJgMe = !!(allyJungle?.isMe)
+        const jgName = meOrName(isJgMe, allyJungle.summonerName)
+        if (jgLevel >= 2) {
+          const key = "jglv" + jgLevel + (allyJungle.summonerName || "")
+          const titles = isJgMe
+            ? ["Você (jungle) " + jgLevel + " níveis atrás", "XP de jungle em queda: você Lv" + allyJungle.level]
+            : ["Jungle aliado " + jgLevel + " níveis atrás", jgName + " perdendo XP: -" + jgLevel + " níveis"]
+          out.push({ kind: "blue", title: pickStable(titles, key), detail: jgName + " vs " + enemyJungle.summonerName })
+        }
+        if (jgCs >= 20) {
+          const key = "jgcs" + Math.floor(jgCs / 10) + (allyJungle.summonerName || "")
+          const titles = isJgMe
+            ? ["Você (jungle) " + jgCs + " CS atrás", "Farm de jungle em queda: você -" + jgCs + " CS"]
+            : ["Jungle aliado " + jgCs + " CS atrás", "Farm da jungle ruim: " + jgName + " -" + jgCs + " CS"]
+          out.push({ kind: "blue", title: pickStable(titles, key), detail: jgName + " vs " + enemyJungle.summonerName })
+        }
       }
 
       return out
@@ -1428,6 +1534,12 @@ function html() {
       if (!valid.length) return null
       return valid.reduce((a, b) => Number(a[key]) >= Number(b[key]) ? a : b)
     }
+    function pickStable(arr, key) {
+      let h = 0
+      for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) | 0
+      return arr[Math.abs(h) % arr.length]
+    }
+    function meOrName(isMe, name) { return isMe ? "Você" : (name || "Aliado") }
 
     function itemCount(player) {
       const ignored = new Set([3340, 3363, 3364, 2055, 2003, 2031, 2138, 2139, 2140])
