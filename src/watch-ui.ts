@@ -480,20 +480,19 @@ function html() {
     .metric strong { font-size: 18px; }
     .gold-chart {
       margin-top: 12px;
-      height: 148px;
+      height: 160px;
       border: 1px solid var(--line);
       border-radius: 6px;
-      background: #111417;
+      background: #0e1114;
       overflow: hidden;
     }
     .gold-chart svg { display: block; width: 100%; height: 100%; }
-    .gold-chart .axis { stroke: rgba(255,255,255,.18); stroke-width: 1; }
-    .gold-chart .area.blue { fill: rgba(100,168,255,.16); }
-    .gold-chart .area.red { fill: rgba(255,107,107,.16); }
-    .gold-chart .line.blue { stroke: var(--blue); }
-    .gold-chart .line.red { stroke: var(--red); }
-    .gold-chart .line { fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
-    .gold-chart-label { fill: var(--muted); font: 11px Inter, Segoe UI, Arial, sans-serif; }
+    .gold-chart .area.blue { fill: rgba(100,168,255,.14); }
+    .gold-chart .area.red  { fill: rgba(255,107,107,.14); }
+    .gold-chart .line.blue { stroke: #64a8ff; }
+    .gold-chart .line.red  { stroke: #ff6b6b; }
+    .gold-chart .line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .gold-chart-label { fill: rgba(255,255,255,.35); font: 10px/1 Inter, Segoe UI, Arial, sans-serif; }
     .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.06); }
     .row:last-child { border-bottom: 0; }
     .name { font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -719,27 +718,75 @@ function html() {
         el.innerHTML = '<div class="empty" style="padding:16px">Aguardando snapshots 5x5 para grafico de gold</div>'
         return
       }
-      const width = 640
-      const height = 148
-      const padX = 28
-      const padY = 18
-      const minT = clean[0].gameTime
-      const maxT = clean[clean.length - 1].gameTime
+
+      const W = 640, H = 160
+      const padL = 38, padR = 10, padT = 16, padB = 16
+      const cW = W - padL - padR, cH = H - padT - padB
+      const mid = padT + cH / 2
+
+      const minT = clean[0].gameTime, maxT = clean[clean.length - 1].gameTime
       const maxAbs = Math.max(1000, ...clean.map(p => Math.abs(Number(p.signedGold))))
-      const x = (t) => padX + ((t - minT) / Math.max(1, maxT - minT)) * (width - padX * 2)
-      const y = (g) => height / 2 - (g / maxAbs) * (height / 2 - padY)
-      const path = clean.map((p, i) => (i ? "L" : "M") + x(Number(p.gameTime)).toFixed(1) + " " + y(Number(p.signedGold)).toFixed(1)).join(" ")
+
+      const xf = t => padL + ((t - minT) / Math.max(1, maxT - minT)) * cW
+      const yf = g => mid - (g / maxAbs) * (cH / 2)
+
+      // Split into segments at zero crossings
+      const segs = []
+      let seg = { pos: Number(clean[0].signedGold) >= 0, pts: [clean[0]] }
+      for (let i = 1; i < clean.length; i++) {
+        const a = clean[i - 1], b = clean[i]
+        const ag = Number(a.signedGold), bg = Number(b.signedGold)
+        if ((ag >= 0) !== (bg >= 0)) {
+          const t = ag / (ag - bg)
+          const cross = { gameTime: a.gameTime + t * (b.gameTime - a.gameTime), signedGold: 0 }
+          seg.pts.push(cross)
+          segs.push(seg)
+          seg = { pos: bg >= 0, pts: [cross, b] }
+        } else {
+          seg.pts.push(b)
+        }
+      }
+      segs.push(seg)
+
+      const mkLine = pts => pts.map((p, i) =>
+        (i ? "L" : "M") + xf(p.gameTime).toFixed(1) + " " + yf(p.signedGold).toFixed(1)
+      ).join(" ")
+
+      let out = ""
+
+      // Zero axis line
+      out += '<line x1="' + padL + '" y1="' + mid.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + mid.toFixed(1) + '" stroke="rgba(255,255,255,.2)" stroke-width="1"/>'
+
+      // Areas (drawn below lines)
+      for (const s of segs) {
+        if (s.pts.length < 2) continue
+        const lp = mkLine(s.pts)
+        const x0 = xf(s.pts[0].gameTime).toFixed(1)
+        const xN = xf(s.pts[s.pts.length - 1].gameTime).toFixed(1)
+        out += '<path class="area ' + (s.pos ? "blue" : "red") + '" d="' + lp + ' L' + xN + ' ' + mid.toFixed(1) + ' L' + x0 + ' ' + mid.toFixed(1) + ' Z"/>'
+      }
+
+      // Lines (drawn on top of areas)
+      for (const s of segs) {
+        if (s.pts.length < 2) continue
+        out += '<path class="line ' + (s.pos ? "blue" : "red") + '" d="' + mkLine(s.pts) + '"/>'
+      }
+
+      // Dot at last point
       const last = clean[clean.length - 1]
-      const cls = Number(last.signedGold) >= 0 ? "blue" : "red"
-      const area = path + " L " + x(Number(last.gameTime)).toFixed(1) + " " + (height / 2).toFixed(1) + " L " + x(Number(clean[0].gameTime)).toFixed(1) + " " + (height / 2).toFixed(1) + " Z"
-      el.innerHTML =
-        '<svg viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none">' +
-          '<line class="axis" x1="0" y1="' + (height / 2) + '" x2="' + width + '" y2="' + (height / 2) + '"></line>' +
-          '<path class="area ' + cls + '" d="' + area + '"></path>' +
-          '<path class="line ' + cls + '" d="' + path + '"></path>' +
-          '<text class="gold-chart-label" x="10" y="16">+' + Math.round(maxAbs).toLocaleString("pt-BR") + 'g</text>' +
-          '<text class="gold-chart-label" x="10" y="' + (height - 8) + '">-' + Math.round(maxAbs).toLocaleString("pt-BR") + 'g</text>' +
-        '</svg>'
+      const lx = xf(last.gameTime).toFixed(1), ly = yf(Number(last.signedGold)).toFixed(1)
+      const dc = Number(last.signedGold) >= 0 ? "#64a8ff" : "#ff6b6b"
+      out += '<circle cx="' + lx + '" cy="' + ly + '" r="5" fill="' + dc + '" opacity=".2"/>'
+      out += '<circle cx="' + lx + '" cy="' + ly + '" r="2.5" fill="' + dc + '"/>'
+
+      // Y-axis labels
+      const fmtK = v => v >= 1000 ? (v / 1000).toFixed(1).replace(/\.0$/, "") + "k" : String(Math.round(v))
+      const lbl = (y, txt) => '<text class="gold-chart-label" text-anchor="end" x="' + (padL - 5) + '" y="' + y + '" dy=".35em">' + txt + "</text>"
+      out += lbl(padT + 2, "+" + fmtK(maxAbs))
+      out += lbl(mid, "0")
+      out += lbl(H - padB - 2, "-" + fmtK(maxAbs))
+
+      el.innerHTML = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">' + out + "</svg>"
     }
 
     function renderPostGameAnalysis(post) {
