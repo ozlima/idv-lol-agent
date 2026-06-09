@@ -91,6 +91,9 @@ function resetSettleTracking(puuid: string) {
 }
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+const adminChan = supabase.channel("idv-agent-admin")
+adminChan.subscribe()
+
 const onlineUsers = new Map<string, PresenceState>()
 const playerStates = new Map<string, PlayerDashboardState>()
 const pendingPostGameAnalyses = new Set<string>()
@@ -748,7 +751,7 @@ function html() {
     <header>
       <h1>IDV Watch</h1>
       <div id="player-tabs" class="player-tabs"></div>
-      <div class="status"><span class="dot"></span><span id="conn">conectando</span><span id="clock"></span></div>
+      <div class="status"><span class="dot"></span><span id="conn">conectando</span><span id="clock"></span><button id="btn-force-update" class="pill" style="cursor:pointer;border:none;margin-left:10px;background:rgba(255,200,0,.15);color:#ffc800" onclick="forceUpdate()" title="Força atualização de todos os agents">↑ Atualizar Agents</button></div>
     </header>
     <main>
       <section>
@@ -847,6 +850,15 @@ function html() {
     }
     function toggleAnalysis() {
       fetch("/api/toggle-analysis", { method: "POST" }).catch(() => null)
+    }
+
+    function forceUpdate() {
+      const btn = $("btn-force-update")
+      if (btn) { btn.textContent = "↑ Enviando..."; btn.disabled = true }
+      fetch("/api/force-update", { method: "POST" })
+        .then(r => r.json())
+        .then(() => { if (btn) { btn.textContent = "↑ Enviado!"; setTimeout(() => { btn.textContent = "↑ Atualizar Agents"; btn.disabled = false }, 4000) } })
+        .catch(() => { if (btn) { btn.textContent = "↑ Falhou"; btn.disabled = false } })
     }
 
     function updateAnalysisToggle(enabled) {
@@ -2046,6 +2058,13 @@ const server = http.createServer((req, res) => {
     broadcast()
     sendJson(res, 200, { analysisEnabled })
     console.log(`[watch-ui] Analise IA ${analysisEnabled ? "ativada" : "desativada"}`)
+    return
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/force-update") {
+    void adminChan.send({ type: "broadcast", event: "update", payload: {} })
+    sendJson(res, 200, { sent: true })
+    console.log("[watch-ui] Broadcast de update enviado para agents")
     return
   }
 

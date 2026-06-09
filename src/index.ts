@@ -694,10 +694,14 @@ async function getRemoteCommitSha(): Promise<string | null> {
     const res = await fetch("https://api.github.com/repos/ozlima/idv-lol-agent/commits/master", {
       headers: { "User-Agent": "idv-lol-agent" },
     })
-    if (!res.ok) return null
+    if (!res.ok) {
+      console.warn(`[agent] GitHub API retornou ${res.status}`)
+      return null
+    }
     const data = await res.json() as { sha?: string }
     return data.sha ?? null
-  } catch {
+  } catch (e) {
+    console.warn("[agent] GitHub API falhou:", (e as Error).message)
     return null
   }
 }
@@ -743,7 +747,9 @@ async function checkForCodeUpdate(isUnderPM2: boolean) {
 
   if (!isGitCheckout()) {
     const remoteSha = await getRemoteCommitSha()
-    if (remoteSha && remoteSha !== getLocalZipVersion()) {
+    const localSha  = getLocalZipVersion()
+    console.log(`[agent] Versao: local=${localSha.slice(0, 12) || "(sem arquivo)"} remote=${remoteSha?.slice(0, 12) ?? "(falha API)"}`)
+    if (remoteSha && remoteSha !== localSha) {
       applyZipCodeUpdate(remoteSha, isUnderPM2)
     }
     return
