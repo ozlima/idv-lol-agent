@@ -905,7 +905,14 @@ async function main() {
   adminClient
     .channel("idv-agent-admin")
     .on("broadcast", { event: "update" }, () => {
-      applyCodeUpdate("comando admin", isUnderPM2)
+      if (isGitCheckout()) {
+        applyCodeUpdate("comando admin", isUnderPM2)
+      } else {
+        void getRemoteCommitSha().then(sha => {
+          if (sha) applyZipCodeUpdate(sha, isUnderPM2)
+          else console.warn("[agent] Broadcast update: nao foi possivel obter SHA remoto")
+        })
+      }
     })
     .subscribe((status) => {
       if (status === "SUBSCRIBED") console.log("[agent] Canal admin conectado")
