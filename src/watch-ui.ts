@@ -1,9 +1,16 @@
 import http from "http"
+import { execSync } from "child_process"
 import { createClient } from "@supabase/supabase-js"
 import { config } from "dotenv"
 import { generatePostGameAnalysis, type EndGameSnapshot } from "./post-game-analysis.js"
 
 config()
+
+function readGitCommit(): string {
+  try { return execSync("git rev-parse --short HEAD", { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore","pipe","pipe"] }).trim() }
+  catch { return "unknown" }
+}
+const CURRENT_VERSION = readGitCommit()
 
 const SUPABASE_URL = process.env.SUPABASE_URL!
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY!
@@ -26,6 +33,7 @@ type PresenceState = {
   puuid: string
   gameName: string
   tagLine: string
+  version?: string
   phase: string
   since: string
 }
@@ -259,6 +267,7 @@ function snapshot() {
   }))
   return {
     now: nowIso(),
+    currentVersion: CURRENT_VERSION,
     onlineUsers: [...onlineUsers.values()],
     players,
   }
@@ -877,13 +886,22 @@ function html() {
 
     function renderPlayerTabs(s, current) {
       const players = s.players || []
+      const latest = s.currentVersion || ""
       $("player-tabs").innerHTML = players.map(p => {
         const presence = p.presence || {}
         const me = p.latestGameUpdate?.me || {}
         const name = presence.gameName ? presence.gameName + "#" + presence.tagLine : (me.summonerName || p.puuid.slice(0, 8))
         const phase = p.latestGameflow?.phase || presence.phase || "-"
         const active = current?.puuid === p.puuid ? " active" : ""
-        return '<button class="player-tab' + active + '" data-puuid="' + esc(p.puuid) + '"><span class="dot"></span><span class="player-tab-name">' + esc(name) + '</span><span class="player-tab-phase">' + esc(phase) + '</span></button>'
+        const agentVer = presence.version || ""
+        const verOk = agentVer && latest && agentVer === latest
+        const verOld = agentVer && latest && agentVer !== latest
+        const verDot = verOk
+          ? '<span title="Atualizado ' + esc(agentVer) + '" style="width:7px;height:7px;border-radius:999px;background:var(--green);display:inline-block;margin-left:4px"></span>'
+          : verOld
+            ? '<span title="Desatualizado: ' + esc(agentVer) + ' vs ' + esc(latest) + '" style="width:7px;height:7px;border-radius:999px;background:var(--yellow);display:inline-block;margin-left:4px"></span>'
+            : ''
+        return '<button class="player-tab' + active + '" data-puuid="' + esc(p.puuid) + '"><span class="dot"></span><span class="player-tab-name">' + esc(name) + verDot + '</span><span class="player-tab-phase">' + esc(phase) + '</span></button>'
       }).join("") || '<span class="sub">Nenhum agent com eventos ainda</span>'
       for (const btn of document.querySelectorAll(".player-tab")) {
         btn.onclick = () => {

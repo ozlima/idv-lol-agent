@@ -7,6 +7,12 @@ import { getAllGameData, isGameRunning, type AllGameData, type LiveGameEvent } f
 import { publishEvent } from "./publisher.js"
 import { analyzeLoadingScreen, type LoadingAnalysisResult } from "./loading-analysis.js"
 
+function readGitCommit(): string {
+  try { return execSync("git rev-parse --short HEAD", { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore","pipe","pipe"] }).trim() }
+  catch { return "unknown" }
+}
+const AGENT_VERSION = readGitCommit()
+
 let champMap: Map<number, string> | null = null
 let champMapLastAttempt = 0
 
@@ -68,7 +74,7 @@ let myGameName: string | null = null
 
 // Presence
 let presenceChannel: RealtimeChannel | null = null
-let presenceMeta: { puuid: string; gameName: string; tagLine: string } | null = null
+let presenceMeta: { puuid: string; gameName: string; tagLine: string; version: string } | null = null
 let lastPublishedPresencePhase = ""
 
 async function updatePresence(phase: string, force = false) {
@@ -883,7 +889,7 @@ async function main() {
   // â”€â”€ PresenÃ§a online â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const presenceClient = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!)
   presenceChannel = presenceClient.channel("idv-agent-presence")
-  presenceMeta    = { puuid: myPuuid!, gameName: myGameName!, tagLine: summoner.tagLine }
+  presenceMeta    = { puuid: myPuuid!, gameName: myGameName!, tagLine: summoner.tagLine, version: AGENT_VERSION }
 
   presenceChannel.subscribe(async (status) => {
     if (status === "SUBSCRIBED") {
