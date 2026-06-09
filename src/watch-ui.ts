@@ -107,7 +107,25 @@ function pushEvent(row: EventRow, realtime = false) {
       state.latestLoading = row.data
     }
   } else if (row.event_type === "gameflow_phase") {
+    const newPhase  = String(asRecord(row.data).phase  ?? "")
+    const prevPhase = String(asRecord(state.latestGameflow).phase ?? "")
     state.latestGameflow = row.data
+
+    if (newPhase === "ChampSelect" && prevPhase !== "ChampSelect") {
+      state.latestChampSelect     = null
+      state.latestLoading         = null
+      state.latestScoreboard      = null
+      state.latestScoreboardAt    = null
+      state.goldHistory           = []
+      state.playerFingerprint     = {}
+      state.playerLastSeenAt      = {}
+      state.latestGameUpdate      = null
+      state.latestGameUpdateAt    = null
+      state.latestGameEnd         = null
+      state.latestPostGameAnalysis = null
+      state.events = []
+      console.log(`[watch-ui] Nova fila detectada para ${row.puuid.slice(0, 8)} — estado limpo`)
+    }
   } else if (row.event_type === "scoreboard") {
     if (isReliableScoreboard(row.data)) {
       updatePlayerFingerprints(state, row.data)
