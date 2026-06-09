@@ -49,6 +49,35 @@ type PlayerDashboardState = {
   latestGameEnd: EventRow | null
   latestPostGameAnalysis: Record<string, unknown> | null
   events: EventRow[]
+  // Stable gold diff: only updates when all 10 players have bought since last settle
+  stableGoldDiff: number | null
+  goldDiffPending: boolean
+  // True only after game_start event fires (loading screen does not count)
+  gameStarted: boolean
+}
+
+// Server-side only settle tracking (Set is not JSON-serialisable — keep out of state)
+type SettleTracking = {
+  itemFingerprints: Record<string, string>
+  boughtSinceSettle: Set<string>
+  lastSettleGameTime: number
+}
+const settleTracking = new Map<string, SettleTracking>()
+
+function getSettleTracking(puuid: string): SettleTracking {
+  let s = settleTracking.get(puuid)
+  if (!s) {
+    s = { itemFingerprints: {}, boughtSinceSettle: new Set(), lastSettleGameTime: 0 }
+    settleTracking.set(puuid, s)
+  }
+  return s
+}
+
+function resetSettleTracking(puuid: string) {
+  const s = getSettleTracking(puuid)
+  s.itemFingerprints = {}
+  s.boughtSinceSettle.clear()
+  s.lastSettleGameTime = 0
 }
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
@@ -85,6 +114,9 @@ function playerState(puuid: string): PlayerDashboardState {
       latestGameEnd: null,
       latestPostGameAnalysis: null,
       events: [],
+      stableGoldDiff: null,
+      goldDiffPending: false,
+      gameStarted: false,
     }
     playerStates.set(puuid, state)
   }
@@ -124,11 +156,16 @@ function pushEvent(row: EventRow, realtime = false) {
       state.latestGameEnd         = null
       state.latestPostGameAnalysis = null
       state.events = []
+      state.stableGoldDiff        = null
+      state.goldDiffPending       = false
+      state.gameStarted           = false
+      resetSettleTracking(row.puuid)
       console.log(`[watch-ui] Nova fila detectada para ${row.puuid.slice(0, 8)} — estado limpo`)
     }
   } else if (row.event_type === "scoreboard") {
     if (isReliableScoreboard(row.data)) {
       updatePlayerFingerprints(state, row.data)
+      updateItemFingerprints(state.puuid, row.data)
       state.latestScoreboard = row.data
       state.latestScoreboardAt = event.created_at
       if (allPlayersUpdated(row.data) && allPlayersRecent(state, row.data)) {
@@ -141,6 +178,20 @@ function pushEvent(row: EventRow, realtime = false) {
             state.goldHistory = state.goldHistory.slice(-120)
           }
         }
+        // Settle: only update displayed gold diff when all 10 players bought, or 2-min fallback
+        const ss = getSettleTracking(state.puuid)
+        const gameTime = num(row.data.gameTime) ?? 0
+        const allBought = ss.boughtSinceSettle.size >= 10
+        const fallback  = gameTime - ss.lastSettleGameTime >= 120
+        if (allBought || fallback) {
+          const gp = goldPoint(row.data)
+          state.stableGoldDiff  = gp ? gp.signedGold : state.stableGoldDiff
+          state.goldDiffPending = false
+          ss.boughtSinceSettle.clear()
+          ss.lastSettleGameTime = gameTime
+        } else {
+          state.goldDiffPending = ss.boughtSinceSettle.size > 0
+        }
       }
     }
   } else if (row.event_type === "game_update" || row.event_type === "game_start") {
@@ -148,10 +199,15 @@ function pushEvent(row: EventRow, realtime = false) {
       state.goldHistory = []
       state.playerFingerprint = {}
       state.playerLastSeenAt = {}
+      resetSettleTracking(state.puuid)
+      state.stableGoldDiff = null
+      state.goldDiffPending = false
+      state.gameStarted = true
     }
     state.latestGameUpdate = row.data
     state.latestGameUpdateAt = event.created_at
   } else if (row.event_type === "game_end") {
+    state.gameStarted = false
     state.latestGameEnd = event
   } else if (row.event_type === "post_game_analysis") {
     state.latestPostGameAnalysis = row.data
@@ -257,6 +313,19 @@ function allPlayersRecent(state: PlayerDashboardState, data: Record<string, unkn
     const lastSeen = state.playerLastSeenAt[key]
     return lastSeen !== undefined && (gameTime - lastSeen) <= maxStaleSecs
   })
+}
+
+function updateItemFingerprints(puuid: string, data: Record<string, unknown>) {
+  const ss = getSettleTracking(puuid)
+  for (const p of asList(data.players)) {
+    const key = String(p.summonerName || p.championName || "")
+    if (!key) continue
+    const fp = asList(p.items).map(i => String(i.id ?? "")).filter(Boolean).sort().join(",")
+    if (key in ss.itemFingerprints && ss.itemFingerprints[key] !== fp) {
+      ss.boughtSinceSettle.add(key)
+    }
+    ss.itemFingerprints[key] = fp
+  }
 }
 
 function goldPoint(data: Record<string, unknown>) {
@@ -656,7 +725,7 @@ function html() {
             <div class="grid-2">
               <div class="metric"><label>Placar</label><strong id="score">-</strong></div>
               <div class="metric"><label>CS Times</label><strong id="cs">-</strong></div>
-              <div class="metric"><label>Gold Diff</label><strong id="gold">-</strong></div>
+              <div class="metric"><label id="gold-label">Gold Diff</label><strong id="gold">-</strong></div>
               <div class="metric"><label>Online</label><strong id="online">0</strong></div>
             </div>
             <div id="mmr-compare" class="mmr-compare" style="display:none"></div>
@@ -752,19 +821,17 @@ function html() {
       const score = gu.score || {}
       const cs = gu.teamCS || {}
 
-      // Smooth game clock: extrapolate from last known gameTime
+      // Smooth game clock: extrapolate from last known gameTime.
+      // Only tick after game_start fires — loading screen does not count.
+      const gameStarted = !!current?.gameStarted
       const guGameTime = Number(gu.gameTime || 0)
-      if (guGameTime > _lastGameTimeSent) { _lastGameTimeSent = guGameTime; _lastGameTimestampAt = Date.now() }
-      const liveGameTime = _lastGameTimeSent > 0 && (phase === "InProgress" || guGameTime > 0)
+      if (gameStarted && guGameTime > _lastGameTimeSent) { _lastGameTimeSent = guGameTime; _lastGameTimestampAt = Date.now() }
+      if (!gameStarted) { _lastGameTimeSent = 0; _lastGameTimestampAt = 0 }
+      const liveGameTime = gameStarted && _lastGameTimeSent > 0
         ? _lastGameTimeSent + (Date.now() - _lastGameTimestampAt) / 1000
         : 0
 
-      const phaseElapsed = _phaseAt > 0 && phase && phase !== "None" && phase !== ""
-        ? Math.floor((Date.now() - _phaseAt) / 1000) : 0
-
-      $("game-time").textContent = liveGameTime > 0
-        ? fmt(liveGameTime)
-        : (phaseElapsed > 3 ? fmt(phaseElapsed) : "-")
+      $("game-time").textContent = liveGameTime > 0 ? fmt(liveGameTime) : "-"
       const sb = current?.latestScoreboard || {}
       const gold = sb.teamGold || {}
       const players = sb.players || []
@@ -781,11 +848,12 @@ function html() {
       const csL = Number.isFinite(cs.order) ? (myTeam === "CHAOS" ? cs.chaos : cs.order) : null
       const csR = Number.isFinite(cs.order) ? (myTeam === "CHAOS" ? cs.order : cs.chaos) : null
       $("cs").textContent = csL !== null ? csL + " x " + csR : "-"
-      const signedGold = Number.isFinite(gold.difference) && myTeam && Number(gu.gameTime ?? sb.gameTime ?? 0) >= 30
-        ? (gold.leading === myTeam ? gold.difference : -gold.difference)
-        : null
-      $("gold").textContent = signedGold !== null
-        ? (signedGold > 0 ? "+" : "") + signedGold.toLocaleString("pt-BR")
+      const stableGold = current?.stableGoldDiff
+      const pending = current?.goldDiffPending === true
+      const goldLabel = document.getElementById("gold-label")
+      if (goldLabel) goldLabel.textContent = pending ? "Gold Diff ⏳" : "Gold Diff"
+      $("gold").textContent = typeof stableGold === "number"
+        ? (stableGold > 0 ? "+" : "") + stableGold.toLocaleString("pt-BR")
         : "-"
       renderGoldChart(current?.goldHistory || [])
 
