@@ -273,7 +273,7 @@ async function sendScoreboard(data?: AllGameData) {
     deaths:       p.scores?.deaths     ?? 0,
     assists:      p.scores?.assists    ?? 0,
     cs:           p.scores?.creepScore ?? 0,
-    items:        p.items?.map(i => ({ id: i.itemID, name: i.displayName })) ?? [],
+    items:        await Promise.all((p.items ?? []).map(async i => ({ id: i.itemID, name: i.displayName, price: await getItemPrice(i.itemID) }))),
     netWorth:     await calcNetWorth(p.items ?? []),
     isMe:         matchesMe(p.summonerName),
   })))
@@ -415,7 +415,8 @@ async function sendGameUpdate(type: "game_start" | "game_update") {
 
 function matchesMe(summonerName: string): boolean {
   if (!myGameName) return false
-  return summonerName.toLowerCase().startsWith(myGameName.toLowerCase())
+  // Strip "#Tag" suffix before comparing — avoids false-positive on enemy with similar prefix
+  return summonerName.split('#')[0].toLowerCase() === myGameName.toLowerCase()
 }
 
 async function pollGameEvents() {
