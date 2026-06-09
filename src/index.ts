@@ -8,26 +8,31 @@ import { publishEvent } from "./publisher.js"
 import { analyzeLoadingScreen, type LoadingAnalysisResult } from "./loading-analysis.js"
 
 let champMap: Map<number, string> | null = null
+let champMapLastAttempt = 0
 
 async function getChampName(id: number): Promise<string> {
-  if (!champMap) {
+  if (!champMap && Date.now() - champMapLastAttempt > 30_000) {
+    champMapLastAttempt = Date.now()
     try {
       const res = await fetch("https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-summary.json")
       if (res.ok) {
         const data = await res.json() as Array<{ id: number; name: string }>
         champMap = new Map(data.map(c => [c.id, c.name]))
+        console.log(`[champ-map] Carregados ${champMap.size} campeões`)
       }
-    } catch {
-      champMap = new Map()
+    } catch (e) {
+      console.warn("[champ-map] Falha ao carregar — retry em 30s:", (e as Error).message)
     }
   }
   return champMap?.get(id) ?? `ID ${id}`
 }
 
 let itemPrices: Map<number, number> | null = null
+let itemPricesLastAttempt = 0
 
 async function getItemPrice(itemId: number): Promise<number> {
-  if (!itemPrices) {
+  if (!itemPrices && Date.now() - itemPricesLastAttempt > 30_000) {
+    itemPricesLastAttempt = Date.now()
     try {
       const verRes = await fetch("https://ddragon.leagueoflegends.com/api/versions.json")
       const versions = await verRes.json() as string[]
@@ -36,9 +41,10 @@ async function getItemPrice(itemId: number): Promise<number> {
       if (res.ok) {
         const data = await res.json() as { data: Record<string, { gold: { total: number } }> }
         itemPrices = new Map(Object.entries(data.data).map(([id, item]) => [Number(id), item.gold.total]))
+        console.log(`[item-prices] Carregados ${itemPrices.size} itens (patch ${ver})`)
       }
-    } catch {
-      itemPrices = new Map()
+    } catch (e) {
+      console.warn("[item-prices] Falha ao carregar DDragon — retry em 30s:", (e as Error).message)
     }
   }
   return itemPrices?.get(itemId) ?? 0
