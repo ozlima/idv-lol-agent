@@ -31,18 +31,29 @@ type PresenceState = {
 }
 
 const MAX_EVENTS = 80
+const HYDRATE_EVENTS = 2000
+const MIN_POST_GAME_ANALYSIS_SECONDS = 600
+
+type PlayerDashboardState = {
+  puuid: string
+  latestLoading: Record<string, unknown> | null
+  latestChampSelect: Record<string, unknown> | null
+  latestGameflow: Record<string, unknown> | null
+  latestScoreboard: Record<string, unknown> | null
+  latestScoreboardAt: string | null
+  goldHistory: Array<{ gameTime: number; signedGold: number }>
+  playerFingerprint: Record<string, string>
+  playerLastSeenAt: Record<string, number>
+  latestGameUpdate: Record<string, unknown> | null
+  latestGameUpdateAt: string | null
+  latestGameEnd: EventRow | null
+  latestPostGameAnalysis: Record<string, unknown> | null
+  events: EventRow[]
+}
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
-const events: EventRow[] = []
 const onlineUsers = new Map<string, PresenceState>()
-let latestLoading: Record<string, unknown> | null = null
-let latestChampSelect: Record<string, unknown> | null = null
-let latestGameflow: Record<string, unknown> | null = null
-let latestScoreboard: Record<string, unknown> | null = null
-let latestScoreboardAt: string | null = null
-let latestGameUpdate: Record<string, unknown> | null = null
-let latestGameUpdateAt: string | null = null
-let latestPostGameAnalysis: Record<string, unknown> | null = null
+const playerStates = new Map<string, PlayerDashboardState>()
 const pendingPostGameAnalyses = new Set<string>()
 
 const clients = new Set<http.ServerResponse>()
@@ -56,32 +67,90 @@ function mins(seconds: number) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`
 }
 
+function playerState(puuid: string): PlayerDashboardState {
+  let state = playerStates.get(puuid)
+  if (!state) {
+    state = {
+      puuid,
+      latestLoading: null,
+      latestChampSelect: null,
+      latestGameflow: null,
+      latestScoreboard: null,
+      latestScoreboardAt: null,
+      goldHistory: [],
+      playerFingerprint: {},
+      playerLastSeenAt: {},
+      latestGameUpdate: null,
+      latestGameUpdateAt: null,
+      latestGameEnd: null,
+      latestPostGameAnalysis: null,
+      events: [],
+    }
+    playerStates.set(puuid, state)
+  }
+  return state
+}
+
 function pushEvent(row: EventRow, realtime = false) {
   if (row.event_type === "raw_lol_event") return
   const event = { ...row, created_at: row.created_at ?? nowIso() }
-  events.unshift(event)
-  events.splice(MAX_EVENTS)
+  const state = playerState(row.puuid)
+  state.events.unshift(event)
+  state.events.splice(MAX_EVENTS)
 
   if (row.event_type === "champ_select_state" || row.event_type === "champ_select_complete") {
-    latestChampSelect = row.data
+    state.latestChampSelect = row.data
   }
 
   if (row.event_type === "loading_analysis") {
-    latestLoading = row.data
+    if (loadingQuality(row.data) >= loadingQuality(state.latestLoading)) {
+      state.latestLoading = row.data
+    }
   } else if (row.event_type === "gameflow_phase") {
-    latestGameflow = row.data
+    state.latestGameflow = row.data
   } else if (row.event_type === "scoreboard") {
-    latestScoreboard = row.data
-    latestScoreboardAt = event.created_at
+    if (isReliableScoreboard(row.data)) {
+      updatePlayerFingerprints(state, row.data)
+      state.latestScoreboard = row.data
+      state.latestScoreboardAt = event.created_at
+      if (allPlayersUpdated(row.data) && allPlayersRecent(state, row.data)) {
+        const point = goldPoint(row.data)
+        if (point) {
+          const last = state.goldHistory[state.goldHistory.length - 1]
+          if (last && point.gameTime < last.gameTime - 60) state.goldHistory = []
+          if (!state.goldHistory.some(p => p.gameTime === point.gameTime)) {
+            state.goldHistory.push(point)
+            state.goldHistory = state.goldHistory.slice(-120)
+          }
+        }
+      }
+    }
   } else if (row.event_type === "game_update" || row.event_type === "game_start") {
-    latestGameUpdate = row.data
-    latestGameUpdateAt = event.created_at
+    if (row.event_type === "game_start") {
+      state.goldHistory = []
+      state.playerFingerprint = {}
+      state.playerLastSeenAt = {}
+    }
+    state.latestGameUpdate = row.data
+    state.latestGameUpdateAt = event.created_at
+  } else if (row.event_type === "game_end") {
+    state.latestGameEnd = event
   } else if (row.event_type === "post_game_analysis") {
-    latestPostGameAnalysis = row.data
+    state.latestPostGameAnalysis = row.data
   }
 
   broadcast()
   if (realtime && row.event_type === "game_end") void analyzeGameEnd(event)
+}
+
+function loadingQuality(data: Record<string, unknown> | null) {
+  if (!data) return -1
+  const completeness = asRecord(data.completeness)
+  const participantCount = num(completeness.participantCount) ?? asList(data.myTeam).length + asList(data.enemyTeam).length
+  const rankedCount = num(completeness.rankedCount) ?? 0
+  const summonerCount = num(completeness.summonerCount) ?? 0
+  const completeBonus = completeness.complete ? 1000 : 0
+  return completeBonus + participantCount * 100 + rankedCount * 10 + summonerCount
 }
 
 async function hydrateEvents() {
@@ -89,7 +158,7 @@ async function hydrateEvents() {
     .from("live_game_events")
     .select("*")
     .order("created_at", { ascending: false })
-    .limit(MAX_EVENTS)
+    .limit(HYDRATE_EVENTS)
 
   if (error) {
     console.warn("[watch-ui] Nao foi possivel carregar eventos recentes:", error.message)
@@ -99,19 +168,25 @@ async function hydrateEvents() {
   for (const row of (data ?? []).reverse()) pushEvent(row as EventRow)
 }
 
+async function retryFailedPostGameAnalyses() {
+  for (const state of playerStates.values()) {
+    if (state.latestPostGameAnalysis?.status !== "erro") continue
+    const gameEnd = state.latestGameEnd ?? state.events.find(e => e.event_type === "game_end")
+    if (!gameEnd) continue
+    console.log(`[watch-ui] Reprocessando analise pos-jogo com erro para ${state.puuid.slice(0, 8)}`)
+    void analyzeGameEnd(gameEnd)
+  }
+}
+
 function snapshot() {
+  const players = [...playerStates.values()].map(state => ({
+    ...state,
+    presence: onlineUsers.get(state.puuid) ?? null,
+  }))
   return {
     now: nowIso(),
     onlineUsers: [...onlineUsers.values()],
-    latestLoading,
-    latestChampSelect,
-    latestGameflow,
-    latestScoreboard,
-    latestScoreboardAt,
-    latestGameUpdate,
-    latestGameUpdateAt,
-    latestPostGameAnalysis,
-    events,
+    players,
   }
 }
 
@@ -128,17 +203,70 @@ function num(value: unknown) {
   return Number.isFinite(n) ? n : null
 }
 
-function findMePlayer() {
-  const scoreboardPlayers = asList(latestScoreboard?.players)
+function isReliableScoreboard(data: Record<string, unknown>) {
+  const players = asList(data.players)
+  const order = players.filter(p => p.team === "ORDER")
+  const chaos = players.filter(p => p.team === "CHAOS")
+  return order.length === 5 &&
+    chaos.length === 5 &&
+    players.every(p => Number.isFinite(Number(p.netWorth)))
+}
+
+function allPlayersUpdated(data: Record<string, unknown>) {
+  const players = asList(data.players)
+  return players.length === 10 && players.every(p => Number(p.netWorth) > 0)
+}
+
+function updatePlayerFingerprints(state: PlayerDashboardState, data: Record<string, unknown>) {
+  const gameTime = num(data.gameTime) ?? 0
+  for (const p of asList(data.players)) {
+    const key = String(p.summonerName || p.championName || "")
+    if (!key) continue
+    const fp = `${num(p.cs) ?? 0}|${num(p.kills) ?? 0}|${num(p.level) ?? 0}|${num(p.netWorth) ?? 0}`
+    if (state.playerFingerprint[key] !== fp) {
+      state.playerFingerprint[key] = fp
+      state.playerLastSeenAt[key] = gameTime
+    }
+  }
+}
+
+function allPlayersRecent(state: PlayerDashboardState, data: Record<string, unknown>, maxStaleSecs = 90) {
+  const gameTime = num(data.gameTime)
+  if (gameTime === null || gameTime < 120) return true
+  const players = asList(data.players)
+  return players.every(p => {
+    const key = String(p.summonerName || p.championName || "")
+    const lastSeen = state.playerLastSeenAt[key]
+    return lastSeen !== undefined && (gameTime - lastSeen) <= maxStaleSecs
+  })
+}
+
+function goldPoint(data: Record<string, unknown>) {
+  const players = asList(data.players)
+  const me = players.find(p => p.isMe)
+  const teamGold = asRecord(data.teamGold)
+  const diff = num(teamGold.difference)
+  const gameTime = num(data.gameTime)
+  if (gameTime !== null && gameTime < 30) return null
+  if (!me?.team || diff === null || gameTime === null) return null
+  return {
+    gameTime,
+    signedGold: teamGold.leading === me.team ? diff : -diff,
+  }
+}
+
+function findMePlayer(state: PlayerDashboardState) {
+  const scoreboardPlayers = asList(state.latestScoreboard?.players)
   const scoreboardMe = scoreboardPlayers.find(p => p.isMe)
-  const updateMe = asRecord(latestGameUpdate?.me)
-  const updatePlayers = asList(latestGameUpdate?.allPlayers)
+  const updateMe = asRecord(state.latestGameUpdate?.me)
+  const updatePlayers = asList(state.latestGameUpdate?.allPlayers)
   const byName = updateMe.summonerName ? updatePlayers.find(p => p.summonerName === updateMe.summonerName) : null
   return { ...updateMe, ...asRecord(byName), ...asRecord(scoreboardMe) }
 }
 
 function gameEndKey(row: EventRow) {
-  const gameTime = num(row.data?.gameTime) ?? num(latestGameUpdate?.gameTime) ?? num(latestScoreboard?.gameTime) ?? 0
+  const state = playerState(row.puuid)
+  const gameTime = num(row.data?.gameTime) ?? num(state.latestGameUpdate?.gameTime) ?? num(state.latestScoreboard?.gameTime) ?? 0
   const created = row.created_at ? Math.floor(new Date(row.created_at).getTime() / 60_000) : Date.now()
   return `${row.puuid}:${Math.floor(gameTime)}:${created}`
 }
@@ -157,27 +285,40 @@ async function analyzeGameEnd(row: EventRow) {
   if (pendingPostGameAnalyses.has(key)) return
   pendingPostGameAnalyses.add(key)
 
-  await insertPostGameStatus(row, "gerando", { startedAt: nowIso() })
-
   try {
-    const me = findMePlayer()
-    const gameUpdate = latestGameUpdate ?? {}
+    const state = playerState(row.puuid)
+    const me = findMePlayer(state)
+    const gameUpdate = state.latestGameUpdate ?? {}
     const endData = row.data ?? {}
+    const duration = num(endData.gameTime) ?? num(gameUpdate?.gameTime) ?? num(state.latestScoreboard?.gameTime) ?? undefined
+
+    if (!duration || duration < MIN_POST_GAME_ANALYSIS_SECONDS) {
+      await insertPostGameStatus(row, "ignorado", {
+        generatedAt: nowIso(),
+        reason: "remake_or_short_game",
+        detail: `Partida curta (${mins(duration ?? 0)}). Analise IA ignorada.`,
+        duration,
+      })
+      return
+    }
+
+    await insertPostGameStatus(row, "gerando", { startedAt: nowIso(), duration })
+
     const snapshotData: EndGameSnapshot = {
       summonerName: String(me.summonerName || gameUpdate?.summonerName || ""),
       championName: String(me.championName || gameUpdate?.championName || ""),
       position: String(me.position || me.assignedPosition || ""),
       result: String(endData.result || gameUpdate?.result || ""),
-      duration: num(endData.gameTime) ?? num(gameUpdate?.gameTime) ?? num(latestScoreboard?.gameTime) ?? undefined,
+      duration,
       me,
       score: asRecord(gameUpdate?.score),
-      teamGold: asRecord(latestScoreboard?.teamGold),
+      teamGold: asRecord(state.latestScoreboard?.teamGold),
       teamCS: asRecord(gameUpdate?.teamCS),
-      loading: latestLoading,
-      scoreboard: latestScoreboard,
-      gameUpdate: latestGameUpdate,
-      events: events
-        .filter(e => e.puuid === row.puuid && e.event_type !== "post_game_analysis")
+      loading: state.latestLoading,
+      scoreboard: state.latestScoreboard,
+      gameUpdate: state.latestGameUpdate,
+      events: state.events
+        .filter(e => e.event_type !== "post_game_analysis")
         .slice(0, 60)
         .map(e => ({ event_type: e.event_type, data: e.data, created_at: e.created_at })),
     }
@@ -258,6 +399,32 @@ function html() {
     h1 { margin: 0; font-size: 18px; font-weight: 750; }
     .status { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 13px; }
     .dot { width: 9px; height: 9px; border-radius: 999px; background: var(--green); box-shadow: 0 0 0 3px rgba(66,210,125,.12); }
+    .player-tabs {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      max-width: 56vw;
+      overflow-x: auto;
+      padding: 0 6px;
+    }
+    .player-tab {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 120px;
+      max-width: 220px;
+      height: 34px;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #111417;
+      color: var(--muted);
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .player-tab.active { color: var(--text); border-color: rgba(100,168,255,.65); background: rgba(100,168,255,.12); }
+    .player-tab-name { overflow: hidden; text-overflow: ellipsis; font-weight: 800; }
+    .player-tab-phase { color: var(--muted); font-size: 11px; }
     main {
       flex: 1;
       display: grid;
@@ -311,6 +478,22 @@ function html() {
     }
     .metric label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
     .metric strong { font-size: 18px; }
+    .gold-chart {
+      margin-top: 12px;
+      height: 148px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #111417;
+      overflow: hidden;
+    }
+    .gold-chart svg { display: block; width: 100%; height: 100%; }
+    .gold-chart .axis { stroke: rgba(255,255,255,.18); stroke-width: 1; }
+    .gold-chart .area.blue { fill: rgba(100,168,255,.16); }
+    .gold-chart .area.red { fill: rgba(255,107,107,.16); }
+    .gold-chart .line.blue { stroke: var(--blue); }
+    .gold-chart .line.red { stroke: var(--red); }
+    .gold-chart .line { fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+    .gold-chart-label { fill: var(--muted); font: 11px Inter, Segoe UI, Arial, sans-serif; }
     .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.06); }
     .row:last-child { border-bottom: 0; }
     .name { font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -326,6 +509,11 @@ function html() {
       border-bottom: 1px solid rgba(255,255,255,.07);
     }
     .champ-card:last-child { border-bottom: 0; }
+    .champ-card.high-gold {
+      border-left: 3px solid var(--yellow);
+      background: linear-gradient(90deg, rgba(240,200,90,.18), rgba(240,200,90,.045));
+      box-shadow: inset 0 0 0 1px rgba(240,200,90,.18);
+    }
     .champ-main { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
     .champ-name { font-weight: 850; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .champ-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
@@ -357,6 +545,19 @@ function html() {
     .analysis-text { white-space: pre-wrap; line-height: 1.45; color: var(--text); font-size: 13px; }
     .analysis-list { margin: 10px 0 0; padding-left: 18px; color: var(--text); }
     .analysis-list li { margin: 5px 0; }
+    .raw-ai {
+      margin-top: 12px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #111417;
+      color: var(--muted);
+      white-space: pre-wrap;
+      word-break: break-word;
+      font: 12px/1.4 Consolas, "Courier New", monospace;
+      max-height: 220px;
+      overflow: auto;
+    }
     .empty { color: var(--muted); padding: 14px 0; }
     @media (max-width: 1120px) {
       main { grid-template-columns: 1fr; }
@@ -368,6 +569,7 @@ function html() {
   <div class="app">
     <header>
       <h1>IDV Watch</h1>
+      <div id="player-tabs" class="player-tabs"></div>
       <div class="status"><span class="dot"></span><span id="conn">conectando</span><span id="clock"></span></div>
     </header>
     <main>
@@ -397,6 +599,7 @@ function html() {
               <div class="metric"><label>Gold Diff</label><strong id="gold">-</strong></div>
               <div class="metric"><label>Online</label><strong id="online">0</strong></div>
             </div>
+            <div id="gold-chart" class="gold-chart"></div>
           </div>
         </div>
         <div class="panel">
@@ -431,6 +634,7 @@ function html() {
   </div>
   <script>
     let state = null
+    let selectedPuuid = ""
     const $ = (id) => document.getElementById(id)
     const esc = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]))
     const fmt = (sec) => {
@@ -449,32 +653,93 @@ function html() {
 
     function render(s) {
       $("clock").textContent = new Date().toLocaleTimeString("pt-BR")
+      const current = currentPlayerState(s)
+      renderPlayerTabs(s, current)
       $("online").textContent = s.onlineUsers.length
-      $("phase").textContent = s.latestGameflow?.phase || s.onlineUsers[0]?.phase || "-"
+      $("phase").textContent = current?.latestGameflow?.phase || current?.presence?.phase || "-"
 
-      const gu = s.latestGameUpdate || {}
+      const gu = current?.latestGameUpdate || {}
       const score = gu.score || {}
       const cs = gu.teamCS || {}
       $("game-time").textContent = gu.gameTime ? fmt(gu.gameTime) : "-"
       $("score").textContent = Number.isFinite(score.order) ? score.order + " x " + score.chaos : "-"
       $("cs").textContent = Number.isFinite(cs.order) ? cs.order + " x " + cs.chaos : "-"
 
-      const sb = s.latestScoreboard || {}
+      const sb = current?.latestScoreboard || {}
       const gold = sb.teamGold || {}
       const players = sb.players || []
       const me = players.find(p => p.isMe)
       const myTeam = me?.team
-      const signedGold = Number.isFinite(gold.difference) && myTeam
+      const signedGold = Number.isFinite(gold.difference) && myTeam && Number(gu.gameTime ?? sb.gameTime ?? 0) >= 30
         ? (gold.leading === myTeam ? gold.difference : -gold.difference)
         : null
       $("gold").textContent = signedGold !== null
         ? (signedGold > 0 ? "+" : "") + signedGold.toLocaleString("pt-BR")
         : "-"
+      renderGoldChart(current?.goldHistory || [])
 
-      renderSidePanels(s.latestChampSelect, s.latestLoading, s.latestScoreboard)
-      renderAlerts(s)
-      renderPostGameAnalysis(s.latestPostGameAnalysis)
-      renderEvents(s.events || [])
+      renderSidePanels(current?.latestChampSelect, current?.latestLoading, current?.latestScoreboard)
+      renderAlerts(current || {})
+      renderPostGameAnalysis(current?.latestPostGameAnalysis)
+      renderEvents(current?.events || [])
+    }
+
+    function currentPlayerState(s) {
+      const players = s.players || []
+      if (!players.length) return null
+      if (!selectedPuuid || !players.some(p => p.puuid === selectedPuuid)) {
+        const online = players.find(p => p.presence) || players[0]
+        selectedPuuid = online?.puuid || ""
+      }
+      return players.find(p => p.puuid === selectedPuuid) || players[0]
+    }
+
+    function renderPlayerTabs(s, current) {
+      const players = s.players || []
+      $("player-tabs").innerHTML = players.map(p => {
+        const presence = p.presence || {}
+        const me = p.latestGameUpdate?.me || {}
+        const name = presence.gameName ? presence.gameName + "#" + presence.tagLine : (me.summonerName || p.puuid.slice(0, 8))
+        const phase = p.latestGameflow?.phase || presence.phase || "-"
+        const active = current?.puuid === p.puuid ? " active" : ""
+        return '<button class="player-tab' + active + '" data-puuid="' + esc(p.puuid) + '"><span class="dot"></span><span class="player-tab-name">' + esc(name) + '</span><span class="player-tab-phase">' + esc(phase) + '</span></button>'
+      }).join("") || '<span class="sub">Nenhum agent com eventos ainda</span>'
+      for (const btn of document.querySelectorAll(".player-tab")) {
+        btn.onclick = () => {
+          selectedPuuid = btn.dataset.puuid || ""
+          render(state)
+        }
+      }
+    }
+
+    function renderGoldChart(points) {
+      const el = $("gold-chart")
+      const clean = (points || []).filter(p => Number.isFinite(Number(p.gameTime)) && Number.isFinite(Number(p.signedGold)))
+      if (clean.length < 2) {
+        el.innerHTML = '<div class="empty" style="padding:16px">Aguardando snapshots 5x5 para grafico de gold</div>'
+        return
+      }
+      const width = 640
+      const height = 148
+      const padX = 28
+      const padY = 18
+      const minT = clean[0].gameTime
+      const maxT = clean[clean.length - 1].gameTime
+      const maxAbs = Math.max(1000, ...clean.map(p => Math.abs(Number(p.signedGold))))
+      const x = (t) => padX + ((t - minT) / Math.max(1, maxT - minT)) * (width - padX * 2)
+      const y = (g) => height / 2 - (g / maxAbs) * (height / 2 - padY)
+      const path = clean.map((p, i) => (i ? "L" : "M") + x(Number(p.gameTime)).toFixed(1) + " " + y(Number(p.signedGold)).toFixed(1)).join(" ")
+      const last = clean[clean.length - 1]
+      const cls = Number(last.signedGold) >= 0 ? "blue" : "red"
+      const area = path + " L " + x(Number(last.gameTime)).toFixed(1) + " " + (height / 2).toFixed(1) + " L " + x(Number(clean[0].gameTime)).toFixed(1) + " " + (height / 2).toFixed(1) + " Z"
+      el.innerHTML =
+        '<svg viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none">' +
+          '<line class="axis" x1="0" y1="' + (height / 2) + '" x2="' + width + '" y2="' + (height / 2) + '"></line>' +
+          '<path class="area ' + cls + '" d="' + area + '"></path>' +
+          '<path class="line ' + cls + '" d="' + path + '"></path>' +
+          '<text class="gold-chart-label" x="10" y="16">+' + Math.round(maxAbs).toLocaleString("pt-BR") + 'g</text>' +
+          '<text class="gold-chart-label" x="10" y="' + (height - 8) + '">-' + Math.round(maxAbs).toLocaleString("pt-BR") + 'g</text>' +
+        '</svg>'
     }
 
     function renderPostGameAnalysis(post) {
@@ -494,8 +759,17 @@ function html() {
         $("post-game-analysis").innerHTML = '<div class="alert red"><div class="alert-title">Falha na analise</div><div class="sub">' + esc(post.error || "erro desconhecido") + '</div></div>'
         return
       }
+      if (status === "ignorado") {
+        $("post-game-analysis").innerHTML = '<div class="alert yellow"><div class="alert-title">Analise ignorada</div><div class="sub">' + esc(post.detail || "Partida curta/remake") + '</div></div>'
+        return
+      }
 
       const a = post.analysis || {}
+      const rawAi = a.rawText || post.rawText || JSON.stringify(a, null, 2)
+      const rawTitle = a.rawText || post.rawText ? "Resposta da IA" : "Resposta da IA salva"
+      const rawBlock = rawAi
+        ? '<div class="sub" style="margin-top:12px;font-weight:800">' + rawTitle + '</div><pre class="raw-ai">' + esc(rawAi) + '</pre>'
+        : '<div class="sub" style="margin-top:12px">Resposta da IA nao foi gravada para esta partida.</div>'
       $("post-game-analysis").innerHTML =
         '<div class="analysis-text"><strong>' + esc(a.resumo || "Analise pronta") + '</strong></div>' +
         '<div class="grid-2" style="margin-top:10px">' +
@@ -506,7 +780,8 @@ function html() {
         '<ul class="analysis-list">' + (a.foi_bem || []).map(x => '<li>' + esc(x) + '</li>').join("") + '</ul>' +
         '<div class="sub" style="margin-top:12px;font-weight:800">Errou em</div>' +
         '<ul class="analysis-list">' + (a.errou || []).map(x => '<li>' + esc(x) + '</li>').join("") + '</ul>' +
-        '<div class="alert blue" style="margin-top:12px"><div class="alert-title">Dica pro proximo</div><div class="sub">' + esc(a.dica || "-") + '</div></div>'
+        '<div class="alert blue" style="margin-top:12px"><div class="alert-title">Dica pro proximo</div><div class="sub">' + esc(a.dica || "-") + '</div></div>' +
+        rawBlock
     }
 
     function renderSidePanels(champSelect, loading, scoreboard) {
@@ -518,53 +793,183 @@ function html() {
       const me = players.find(p => p.isMe)
       const allyLive = me?.team ? players.filter(p => p.team === me.team) : []
       const enemyLive = me?.team ? players.filter(p => p.team && p.team !== me.team) : []
+      const highGold = topBy([...allyLive, ...enemyLive], "netWorth")
 
       $("ally-phase").textContent = champSelect?.phase || "-"
       $("enemy-phase").textContent = champSelect?.phase || "-"
       $("ally-count").textContent = Math.max(allyChamp.length, allyAnalysis.length, allyLive.length)
       $("enemy-count").textContent = Math.max(enemyChamp.length, enemyAnalysis.length, enemyLive.length)
 
-      $("ally-team").innerHTML = renderTeamCards("ALLY", allyChamp, allyAnalysis, allyLive)
-      $("enemy-team").innerHTML = renderTeamCards("ENEMY", enemyChamp, enemyAnalysis, enemyLive)
+      $("ally-team").innerHTML = renderTeamCards("ALLY", allyChamp, allyAnalysis, allyLive, enemyChamp, enemyAnalysis, enemyLive, highGold)
+      $("enemy-team").innerHTML = renderTeamCards("ENEMY", enemyChamp, enemyAnalysis, enemyLive, allyChamp, allyAnalysis, allyLive, highGold)
       $("ally-bans").innerHTML = renderBans(champSelect?.bans?.myTeam || loading?.bans?.myTeam || [])
       $("enemy-bans").innerHTML = renderBans(champSelect?.bans?.enemyTeam || loading?.bans?.enemyTeam || [])
 
       const a = loading?.analysis || {}
       $("ally-elo").textContent = a.myTeamAvgMmr ? "MMR " + a.myTeamAvgMmr : "-"
       $("enemy-elo").textContent = a.enemyTeamAvgMmr ? "MMR " + a.enemyTeamAvgMmr : "-"
-      $("ally-analysis").innerHTML = renderAnalysisPanel(allyAnalysis, [a.highestEloMyTeam, a.lowestEloMyTeam])
-      $("enemy-analysis").innerHTML = renderAnalysisPanel(enemyAnalysis, [a.highestEloEnemyTeam, a.lowestEloEnemyTeam])
+      $("ally-analysis").innerHTML = renderAnalysisPanel(allyAnalysis, [a.highestEloMyTeam, a.lowestEloMyTeam], allyChamp, allyLive)
+      $("enemy-analysis").innerHTML = renderAnalysisPanel(enemyAnalysis, [a.highestEloEnemyTeam, a.lowestEloEnemyTeam], enemyChamp, enemyLive)
     }
 
-    function renderTeamCards(side, champTeam, analysisTeam, liveTeam) {
-      const size = Math.max(champTeam.length, analysisTeam.length, liveTeam.length)
-      if (!size) return '<div class="empty">Aguardando champ select</div>'
+    function renderTeamCards(side, champTeam, analysisTeam, liveTeam, opponentChampTeam, opponentAnalysisTeam, opponentLiveTeam, highGold) {
+      const entries = buildTeamEntries(champTeam, analysisTeam, liveTeam)
+      const opponents = buildTeamEntries(opponentChampTeam, opponentAnalysisTeam, opponentLiveTeam)
+      if (!entries.length) return '<div class="empty">Aguardando champ select</div>'
       const rows = []
-      for (let i = 0; i < size; i++) {
-        const c = champTeam[i] || {}
-        const a = analysisTeam[i] || {}
-        const l = matchLive(c, a, liveTeam, i)
-        const pick = c.championName || l?.championName || (a.championId ? "ID " + a.championId : "-")
+      for (let i = 0; i < entries.length; i++) {
+        const entry = entries[i]
+        const c = entry.champ
+        const a = entry.analysis
+        const l = entry.live
+        const opponent = opponentForEntry(entry, opponents, i)
+        const oppLive = opponent?.live || {}
+        const oppAnalysis = opponent?.analysis || {}
+        const pick = entry.championName || (a.championId ? "Campeao pendente" : "-")
         const intent = c.pickIntentName || (c.pickIntentId ? "ID " + c.pickIntentId : "")
-        const name = l?.summonerName || a.summonerName || (c.isMe ? "Voce" : "Jogador " + (i + 1))
-        const pos = c.position || a.assignedPosition || "-"
-        const kda = l ? (l.kills ?? 0) + "/" + (l.deaths ?? 0) + "/" + (l.assists ?? 0) : ""
+        const highGoldClass = isSameLivePlayer(l, highGold) ? " high-gold" : ""
         rows.push(
-          '<div class="champ-card"><div class="champ-main"><div><div class="champ-name">' + esc(name) + '</div><div class="sub">' + esc(pick) + (intent ? ' · intencao ' + esc(intent) : '') + '</div></div><span class="pill ' + (side === "ALLY" ? "blue" : "red") + '">' + esc(pos) + '</span></div>' +
+          '<div class="champ-card' + highGoldClass + '"><div class="champ-main"><div><div class="champ-name">' + esc(pick) + '</div><div class="sub">' + esc(entry.summonerName) + (intent ? ' · intencao ' + esc(intent) : '') + '</div></div><span class="pill ' + (side === "ALLY" ? "blue" : "red") + '">' + esc(entry.roleLabel) + '</span></div>' +
           '<div class="champ-meta">' +
-          (a.elo?.label ? '<span class="pill">' + esc(a.elo.label) + '</span>' : '') +
-          (Number.isFinite(a.mmr) ? '<span class="pill">~' + esc(a.mmr) + '</span>' : '') +
-          (Number.isFinite(l?.netWorth) ? '<span class="pill yellow">' + Number(l.netWorth).toLocaleString("pt-BR") + 'g</span>' : '') +
-          (Number.isFinite(l?.level) ? '<span class="pill">Lv ' + esc(l.level) + '</span>' : '') +
-          (Number.isFinite(l?.cs) ? '<span class="pill">CS ' + esc(l.cs) + '</span>' : '') +
-          (kda ? '<span class="pill">' + esc(kda) + '</span>' : '') +
-          (!l ? '<span class="pill yellow">aguardando live</span>' : '') +
+          renderMetricDiff("Elo", a.mmr, oppAnalysis.mmr, 0, "", a.elo?.label) +
+          renderMetricDiff("Gold", l?.netWorth, oppLive.netWorth, 0, "g") +
+          renderMetricDiff("Kills", l?.kills, oppLive.kills, 0) +
+          renderMetricDiff("Lv", l?.level, oppLive.level, 0) +
+          renderMetricDiff("CS", l?.cs, oppLive.cs, 0) +
+          renderKdaLine(l, oppLive) +
+          (!l || !Object.keys(l).length ? '<span class="pill yellow">aguardando live</span>' : '') +
           '</div></div>'
         )
       }
       return rows.join("")
     }
 
+    function buildTeamEntries(champTeam, analysisTeam, liveTeam) {
+      const entries = []
+      const usedChamp = new Set()
+      const usedLive = new Set()
+      const usedAnalysis = new Set()
+
+      for (let i = 0; i < analysisTeam.length; i++) {
+        const a = analysisTeam[i] || {}
+        const c = matchChampForAnalysis(a, champTeam, i) || {}
+        const l = matchLive(c, a, liveTeam, i) || {}
+        if (c.championId) usedChamp.add(Number(c.championId))
+        if (l.summonerName || l.championName) usedLive.add(l.summonerName || l.championName)
+        usedAnalysis.add(i)
+        entries.push(teamEntry(c, a, l, i))
+      }
+
+      for (let i = 0; i < champTeam.length; i++) {
+        const c = champTeam[i] || {}
+        if (c.championId && usedChamp.has(Number(c.championId))) continue
+        const aIndex = analysisTeam.findIndex(a => a?.championId && Number(a.championId) === Number(c.championId))
+        const a = aIndex >= 0 ? analysisTeam[aIndex] : {}
+        const l = matchLive(c, a, liveTeam, i) || {}
+        if (aIndex >= 0) usedAnalysis.add(aIndex)
+        if (l.summonerName || l.championName) usedLive.add(l.summonerName || l.championName)
+        entries.push(teamEntry(c, a, l, i))
+      }
+
+      for (let i = 0; i < liveTeam.length; i++) {
+        const l = liveTeam[i] || {}
+        const liveKey = l.summonerName || l.championName
+        if (liveKey && usedLive.has(liveKey)) continue
+        const c = champTeam.find(ch => ch.championName && ch.championName === l.championName) || {}
+        const a = analysisTeam.find(an => an.championId && c.championId && Number(an.championId) === Number(c.championId)) ||
+          analysisTeam.find(an => an.championName && an.championName === l.championName) || {}
+        entries.push(teamEntry(c, a, l, i))
+      }
+
+      return entries.sort((a, b) => roleOrder(a.role) - roleOrder(b.role) || a.originalIndex - b.originalIndex)
+    }
+
+    function teamEntry(c, a, l, index) {
+        const championName = c.championName || l?.championName || a.championName || ""
+        const role = normalizeRole(a.assignedPosition || c.position || roleFromIndex(index))
+        return {
+          champ: c,
+          analysis: a,
+          live: l || {},
+          role,
+          roleLabel: roleLabel(role),
+          championName,
+          summonerName: bestSummonerName(a.summonerName, l?.summonerName, championName, a.puuid || c.puuid),
+          originalIndex: index,
+        }
+    }
+
+    function opponentForEntry(entry, opponents, index) {
+      return opponents.find(o => o.role === entry.role) || opponents[index] || null
+    }
+
+    function isSameLivePlayer(player, target) {
+      if (!player || !target) return false
+      if (player.summonerName && target.summonerName && player.summonerName === target.summonerName) return true
+      return player.championName && target.championName &&
+        player.championName === target.championName &&
+        player.team === target.team
+    }
+
+    function normalizeRole(pos) {
+      const p = String(pos || "").toUpperCase()
+      if (p === "TOP") return "TOP"
+      if (p === "JUNGLE") return "JUNGLE"
+      if (p === "MID" || p === "MIDDLE") return "MID"
+      if (p === "BOT" || p === "BOTTOM" || p === "ADC") return "ADC"
+      if (p === "SUPPORT" || p === "UTILITY") return "SUPPORT"
+      return ""
+    }
+
+    function roleFromIndex(index) {
+      return ["TOP", "JUNGLE", "MID", "ADC", "SUPPORT"][index] || ""
+    }
+
+    function roleOrder(role) {
+      return { TOP: 0, JUNGLE: 1, MID: 2, ADC: 3, SUPPORT: 4 }[role] ?? 99
+    }
+
+    function roleLabel(role) {
+      return role === "ADC" ? "ADC" : role === "SUPPORT" ? "SUP" : role || "-"
+    }
+
+    function renderMetricDiff(label, own, opp, decimals = 0, suffix = "", context = "") {
+      if (own === null || own === undefined || opp === null || opp === undefined) return ""
+      const a = Number(own)
+      const b = Number(opp)
+      if (!Number.isFinite(a) || !Number.isFinite(b)) return ""
+      const diff = a - b
+      if (diff === 0) return '<span class="pill">' + esc(equalMetricLabel(label, context)) + '</span>'
+      const cls = diff > 0 ? " green" : diff < 0 ? " red" : ""
+      const sign = diff > 0 ? "+" : ""
+      const formatted = decimals > 0 ? diff.toFixed(decimals) : diff.toLocaleString("pt-BR")
+      const detail = context ? " · " + context : ""
+      return '<span class="pill' + cls + '">' + esc(label + " " + sign + formatted + suffix + detail) + '</span>'
+    }
+
+    function equalMetricLabel(label, context = "") {
+      const detail = context ? " · " + context : ""
+      if (label === "Elo") return "Elos iguais" + detail
+      if (label === "Lv") return "Mesmo nivel"
+      if (label === "Gold") return "Gold igual"
+      if (label === "Kills") return "Kills iguais"
+      if (label === "CS") return "CS igual"
+      if (label === "KDA") return "KDA igual"
+      return label + " igual"
+    }
+
+    function renderKdaLine(player, opponent) {
+      if (!player || !Number.isFinite(Number(player.kills))) return ""
+      const diff = kdaScore(player) - kdaScore(opponent)
+      const cls = diff > 0 ? " green" : diff < 0 ? " red" : ""
+      return '<span class="pill' + cls + '">' + esc("KDA " + Number(player.kills ?? 0) + "/" + Number(player.deaths ?? 0) + "/" + Number(player.assists ?? 0)) + '</span>'
+    }
+
+    function kdaScore(player) {
+      if (!player || !Number.isFinite(Number(player.kills))) return null
+      const deaths = Math.max(1, Number(player.deaths ?? 0))
+      return (Number(player.kills ?? 0) + Number(player.assists ?? 0)) / deaths
+    }
     function matchLive(champ, analysis, liveTeam, index) {
       if (analysis?.summonerName) {
         const byName = liveTeam.find(p => p.summonerName === analysis.summonerName)
@@ -581,32 +986,91 @@ function html() {
       return list.length ? list.map(b => '<span class="ban">' + esc(b) + '</span>').join("") : '<div class="empty">Sem bans ainda</div>'
     }
 
-    function renderAnalysisPanel(team, extremes) {
+    function renderAnalysisPanel(team, extremes, champTeam, liveTeam) {
       const cards = []
       for (const [i, p] of extremes.filter(Boolean).entries()) {
-        cards.push('<div class="metric"><label>' + (i === 0 ? 'Maior elo' : 'Menor elo') + '</label><strong>' + esc(p.summonerName || "-") + '</strong><div class="sub">' + esc(p.elo || "-") + ' · ~' + esc(p.mmr ?? "-") + '</div></div>')
+        const fullPlayer = team.find(t => t.summonerName && t.summonerName === p.summonerName) || p
+        const player = enrichAnalysisPlayer({ ...fullPlayer, ...p }, champTeam, liveTeam, i)
+        const champ = player.championName ? " · " + player.championName : ""
+        const pos = player.assignedPosition ? " · " + player.assignedPosition : ""
+        const level = validAccountLevel(player.level) ? " · Lv " + player.level : ""
+        cards.push('<div class="metric"><label>' + (i === 0 ? 'Maior elo' : 'Menor elo') + '</label><strong>' + esc(player.summonerName || "-") + '</strong><div class="sub">' + esc((player.elo || "-") + champ + pos + level + ' · ~' + (player.mmr ?? "-")) + '</div></div>')
       }
-      const risky = team.filter(p => (p.smurfFlags || []).length || (p.streak?.type && p.streak.count >= 3))
+      const risky = team
+        .map((p, i) => enrichAnalysisPlayer(p, champTeam, liveTeam, i))
+        .filter(p => sanitizedSmurfFlags(p).length || (p.streak?.type && p.streak.count >= 3))
       for (const p of risky) cards.push('<div class="alert yellow">' + analysisLine(p) + '</div>')
       return cards.join("") || '<div class="empty">Aguardando loading analysis</div>'
     }
-
     function analysisLine(p) {
-      const flags = (p.smurfFlags || []).map(f => f.label).join(", ")
+      const flags = sanitizedSmurfFlags(p).map(f => f.label).join(", ")
       const streak = p.streak?.type && p.streak.count >= 3 ? '<span class="pill ' + (p.streak.type === "win" ? "green" : "red") + '">' + p.streak.count + (p.streak.type === "win" ? "W" : "L") + '</span>' : ""
-      const level = p.level ? 'Lv ' + p.level : 'Lv ?'
+      const level = validAccountLevel(p.level) ? 'Lv ' + p.level : 'Lv ?'
       const wr = p.elo?.reliableWinRate ? ' · ' + p.elo.winRate + '% WR / ' + p.elo.totalGames + 'j' : ''
-      return '<div class="alert-title">' + esc(p.summonerName || "-") + '</div><div class="sub">' + esc(p.elo?.label || "-") + ' · ~' + esc(p.mmr || "-") + ' · ' + level + wr + '</div>' + streak + (flags ? '<div class="sub">' + esc(flags) + '</div>' : '')
+      const champ = p.championName ? ' · ' + p.championName : ''
+      return '<div class="alert-title">' + esc(p.summonerName || "-") + '</div><div class="sub">' + esc(p.elo?.label || p.elo || "-") + champ + ' · ~' + esc(p.mmr || "-") + ' · ' + level + wr + '</div>' + streak + (flags ? '<div class="sub">' + esc(flags) + '</div>' : '')
     }
 
+    function enrichAnalysisPlayer(player, champTeam, liveTeam, index) {
+      const champ = matchChampForAnalysis(player, champTeam, index) || {}
+      const live = matchLive(champ, player, liveTeam, index) || {}
+      const championName = player?.championName || champ.championName || live.championName || ""
+      const summonerName = bestSummonerName(player?.summonerName, live.summonerName, championName, player?.puuid)
+      return {
+        ...player,
+        summonerName,
+        championName,
+        assignedPosition: player?.assignedPosition || champ.position || "",
+        level: validAccountLevel(player?.level) ? Number(player.level) : null,
+      }
+    }
+
+    function matchChampForAnalysis(player, champTeam, index) {
+      if (player?.championId) {
+        const byId = champTeam.find(p => Number(p.championId) === Number(player.championId))
+        if (byId) return byId
+      }
+      if (player?.assignedPosition) {
+        const byPos = champTeam.find(p => p.position === player.assignedPosition)
+        if (byPos) return byPos
+      }
+      return champTeam[index]
+    }
+
+    function bestSummonerName(primary, liveName, championName, puuid) {
+      for (const name of [primary, liveName]) {
+        if (!name) continue
+        const s = String(name)
+        if (puuid && s === String(puuid).slice(0, 8)) continue
+        if (championName && s.toLowerCase() === String(championName).toLowerCase()) continue
+        if (isLikelyPuuidHash(s)) continue
+        return s
+      }
+      return championName ? championName + " (nick oculto)" : "Jogador"
+    }
+
+    function isLikelyPuuidHash(name) {
+      return /^[0-9a-f]{8}$/i.test(String(name || ""))
+    }
+
+    function validAccountLevel(level) {
+      const n = Number(level)
+      return Number.isFinite(n) && n > 0
+    }
+
+    function sanitizedSmurfFlags(player) {
+      const flags = player?.smurfFlags || []
+      if (validAccountLevel(player?.level)) return flags
+      return flags.filter(f => !["very_low_level", "low_level_high_elo"].includes(f.code))
+    }
     function renderAlerts(s) {
       const alerts = []
-      alerts.push(...loadingAlerts(s.latestLoading))
+      alerts.push(...loadingAlerts(s.latestLoading, s.latestChampSelect, s.latestScoreboard))
       alerts.push(...gameAlerts(s.latestLoading, s.latestScoreboard, s.latestScoreboardAt, s.latestGameUpdate, s.events || []))
       const unique = dedupeAlerts(alerts).slice(0, 24)
       $("alert-count").textContent = unique.length
       $("alerts").innerHTML = unique.map(a =>
-        '<div class="alert ' + esc(a.kind || "yellow") + '"><div class="alert-title">' + esc(a.title) + '</div><div class="sub">' + esc(a.detail) + '</div></div>'
+        '<div class="alert ' + esc(a.kind || "") + '"><div class="alert-title">' + esc(a.title) + '</div><div class="sub">' + esc(a.detail) + '</div></div>'
       ).join("") || '<div class="empty">Sem alertas agora</div>'
     }
 
@@ -620,45 +1084,76 @@ function html() {
       })
     }
 
-    function loadingAlerts(loading) {
+    function loadingAlerts(loading, champSelect, scoreboard) {
       if (!loading) return []
       const out = []
       const analysis = loading.analysis || {}
       for (const s of analysis.streakAlerts || []) {
+        const player = enrichAlertPlayer(s, loading, champSelect, scoreboard)
         out.push({
-          kind: s.type === "win" ? "green" : "red",
-          title: s.summonerName + " em " + s.count + (s.type === "win" ? " wins" : " losses"),
-          detail: (s.team === "ALLY" ? "Aliado" : "Inimigo") + " · ultimas: " + (s.recent || []).join(""),
+          kind: s.team === "ALLY" ? "blue" : "red",
+          title: player.summonerName + " em " + s.count + (s.type === "win" ? " wins" : " losses"),
+          detail: (s.team === "ALLY" ? "Aliado" : "Inimigo") + " - ultimas: " + (s.recent || []).join(""),
         })
       }
       for (const s of analysis.smurfSuspects || []) {
+        const player = enrichAlertPlayer(s, loading, champSelect, scoreboard)
+        const flags = sanitizedSmurfFlags(player)
+        if (!flags.length) continue
         out.push({
-          kind: "yellow",
-          title: "Possivel smurf: " + s.summonerName,
-          detail: (s.team === "ALLY" ? "Aliado" : "Inimigo") + " · Lv " + s.level + " · ~" + s.mmr + " MMR · " + (s.flags || []).map(f => f.label).join(", "),
+          kind: s.team === "ALLY" ? "blue" : "red",
+          title: "Possivel smurf: " + player.summonerName,
+          detail: (s.team === "ALLY" ? "Aliado" : "Inimigo") + " - " + (validAccountLevel(player.level) ? "Lv " + player.level : "Lv ?") + " - ~" + player.mmr + " MMR - " + flags.map(f => f.label).join(", "),
         })
       }
       for (const p of [...(loading.myTeam || []), ...(loading.enemyTeam || [])]) {
         const total = Number(p.elo?.totalGames ?? 0)
         const wr = Number(p.elo?.winRate ?? 0)
+        const team = (loading.myTeam || []).includes(p) ? "ALLY" : "ENEMY"
         if (total >= 10 && total < 120 && wr >= 62) {
+          const player = enrichAlertPlayer({ ...p, team }, loading, champSelect, scoreboard)
           out.push({
-            kind: p.isMe ? "blue" : "yellow",
-            title: "Win rate alto: " + (p.summonerName || "?"),
-            detail: (p.isMe ? "Voce" : "Jogador") + " · " + wr + "% WR em " + total + " jogos",
+            kind: team === "ALLY" ? "blue" : "red",
+            title: "Win rate alto: " + player.summonerName,
+            detail: (p.isMe ? "Voce" : "Jogador") + " - " + wr + "% WR em " + total + " jogos",
           })
         }
       }
       for (const a of analysis.autofillSuspects || []) {
+        const player = enrichAlertPlayer(a, loading, champSelect, scoreboard)
         out.push({
-          kind: "yellow",
-          title: "Autofill possivel: " + a.summonerName,
-          detail: (a.team === "ALLY" ? "Aliado" : "Inimigo") + " · " + a.assignedPosition + " · spells " + (a.spells || []).join("/"),
+          kind: a.team === "ALLY" ? "blue" : "red",
+          title: "Autofill possivel: " + player.summonerName,
+          detail: (a.team === "ALLY" ? "Aliado" : "Inimigo") + " - " + a.assignedPosition + " - spells " + (a.spells || []).join("/"),
         })
       }
       return out
     }
 
+    function enrichAlertPlayer(raw, loading, champSelect, scoreboard) {
+      const isEnemy = raw.team === "ENEMY"
+      const team = isEnemy ? (loading?.enemyTeam || []) : (loading?.myTeam || [])
+      const idx = team.findIndex(p =>
+        (raw.summonerName && p.summonerName === raw.summonerName) ||
+        (raw.puuid && p.puuid === raw.puuid) ||
+        (raw.championId && p.championId && Number(p.championId) === Number(raw.championId))
+      )
+      const base = { ...(idx >= 0 ? team[idx] : {}), ...raw }
+      const champTeam = isEnemy ? (champSelect?.enemyTeam || []) : (champSelect?.myTeam || [])
+      const live = liveTeams(scoreboard)
+      const liveTeam = isEnemy ? live.enemy : live.ally
+      return enrichAnalysisPlayer(base, champTeam, liveTeam, idx >= 0 ? idx : 0)
+    }
+
+    function liveTeams(scoreboard) {
+      const players = scoreboard?.players || []
+      const me = players.find(p => p.isMe)
+      if (!me?.team) return { ally: [], enemy: [] }
+      return {
+        ally: players.filter(p => p.team === me.team),
+        enemy: players.filter(p => p.team && p.team !== me.team),
+      }
+    }
     function gameAlerts(loading, scoreboard, scoreboardAt, gameUpdate, events) {
       const players = scoreboard?.players || []
       const me = players.find(p => p.isMe)
@@ -677,15 +1172,15 @@ function html() {
       const gameTime = Number(scoreboard.gameTime)
 
       const teamGold = scoreboard.teamGold || {}
-      if (Number.isFinite(Number(teamGold.difference)) && me.team) {
+      if (Number.isFinite(Number(teamGold.difference)) && me.team && gameTime >= 30) {
         const signedGold = teamGold.leading === me.team ? Number(teamGold.difference) : -Number(teamGold.difference)
-        if (signedGold >= 2000) out.push({ kind: "green", title: "Seu time + " + signedGold.toLocaleString("pt-BR") + "g", detail: "Vantagem geral no snapshot " + fmt(gameTime) })
-        if (signedGold <= -2000) out.push({ kind: "red", title: "Seu time " + signedGold.toLocaleString("pt-BR") + "g", detail: "Desvantagem geral no snapshot " + fmt(gameTime) })
+        if (signedGold >= 2000) out.push({ kind: "blue", title: "Seu time + " + signedGold.toLocaleString("pt-BR") + "g", detail: "Vantagem geral no snapshot " + fmt(gameTime) })
+        if (signedGold <= -2000) out.push({ kind: "blue", title: "Seu time " + signedGold.toLocaleString("pt-BR") + "g", detail: "Desvantagem geral no snapshot " + fmt(gameTime) })
       }
 
       const allyCarry = topBy(ally, "netWorth")
       if (allyCarry && Number(allyCarry.netWorth) >= 12000) {
-        out.push({ kind: "green", title: "Carry aliado forte: " + allyCarry.summonerName, detail: allyCarry.championName + " · " + Number(allyCarry.netWorth).toLocaleString("pt-BR") + "g" })
+        out.push({ kind: "blue", title: "Carry aliado forte: " + allyCarry.summonerName, detail: allyCarry.championName + " · " + Number(allyCarry.netWorth).toLocaleString("pt-BR") + "g" })
       }
       const enemyThreat = enemy.find(p => Number(p.kills ?? 0) >= 5 && Number(p.deaths ?? 0) <= 1)
       if (enemyThreat) {
@@ -694,7 +1189,7 @@ function html() {
 
       for (const a of ally) {
         if (gameTime <= 360 && Number(a.deaths ?? 0) >= 2) {
-          out.push({ kind: "red", title: a.summonerName + " morreu " + a.deaths + "x antes dos 6 min", detail: a.championName + " · early game em risco" })
+          out.push({ kind: "blue", title: a.summonerName + " morreu " + a.deaths + "x antes dos 6 min", detail: a.championName + " · early game em risco" })
         }
       }
 
@@ -706,24 +1201,24 @@ function html() {
 
         const goldDiff = Number(enemyMatch.netWorth) - Number(a.netWorth)
         if (goldDiff >= 2000) {
-          out.push({ kind: "red", title: a.summonerName + " esta " + goldDiff.toLocaleString("pt-BR") + "g atras", detail: a.championName + " vs " + enemyMatch.championName + " · snapshot " + fmt(scoreboard.gameTime) })
+          out.push({ kind: "blue", title: a.summonerName + " esta " + goldDiff.toLocaleString("pt-BR") + "g atras", detail: a.championName + " vs " + enemyMatch.championName + " · snapshot " + fmt(scoreboard.gameTime) })
         }
         const levelDiff = Number(enemyMatch.level) - Number(a.level)
         if (levelDiff >= 2) {
-          out.push({ kind: "red", title: a.summonerName + " esta " + levelDiff + " niveis atras", detail: "Lv " + a.level + " contra Lv " + enemyMatch.level + " · snapshot " + fmt(scoreboard.gameTime) })
+          out.push({ kind: "blue", title: a.summonerName + " esta " + levelDiff + " niveis atras", detail: "Lv " + a.level + " contra Lv " + enemyMatch.level + " · snapshot " + fmt(scoreboard.gameTime) })
         }
         const csDiff = Number(enemyMatch.cs) - Number(a.cs)
         if (csDiff >= 50) {
-          out.push({ kind: "yellow", title: a.summonerName + " esta " + csDiff + " CS atras", detail: a.championName + " vs " + enemyMatch.championName + " · snapshot " + fmt(scoreboard.gameTime) })
+          out.push({ kind: "blue", title: a.summonerName + " esta " + csDiff + " CS atras", detail: a.championName + " vs " + enemyMatch.championName + " · snapshot " + fmt(scoreboard.gameTime) })
         }
         if (gameTime >= 600 && gameTime <= 780 && isBotLane(aInfo) && csDiff >= 30) {
-          out.push({ kind: "yellow", title: "Bot lane " + csDiff + " CS atras aos 10 min", detail: a.championName + " vs " + enemyMatch.championName })
+          out.push({ kind: "blue", title: "Bot lane " + csDiff + " CS atras aos 10 min", detail: a.championName + " vs " + enemyMatch.championName })
         }
         const itemDiff = itemCount(enemyMatch) - itemCount(a)
         if (itemDiff >= 2) {
-          out.push({ kind: "yellow", title: a.summonerName + " com spike de item atrasado", detail: enemyMatch.championName + " tem +" + itemDiff + " itens no snapshot " + fmt(scoreboard.gameTime) })
+          out.push({ kind: "blue", title: a.summonerName + " com spike de item atrasado", detail: enemyMatch.championName + " tem +" + itemDiff + " itens no snapshot " + fmt(scoreboard.gameTime) })
         } else if (itemDiff <= -2) {
-          out.push({ kind: "green", title: a.summonerName + " com spike de item", detail: a.championName + " tem +" + Math.abs(itemDiff) + " itens contra " + enemyMatch.championName })
+          out.push({ kind: "blue", title: a.summonerName + " com spike de item", detail: a.championName + " tem +" + Math.abs(itemDiff) + " itens contra " + enemyMatch.championName })
         }
       }
 
@@ -732,8 +1227,8 @@ function html() {
       if (isComparablePair(allyJungle, enemyJungle)) {
         const jgLevel = Number(enemyJungle.level) - Number(allyJungle.level)
         const jgCs = Number(enemyJungle.cs) - Number(allyJungle.cs)
-        if (jgLevel >= 2) out.push({ kind: "red", title: "Jungle aliado " + jgLevel + " niveis atras", detail: allyJungle.summonerName + " vs " + enemyJungle.summonerName })
-        if (jgCs >= 20) out.push({ kind: "yellow", title: "Jungle aliado " + jgCs + " CS atras", detail: allyJungle.summonerName + " vs " + enemyJungle.summonerName })
+        if (jgLevel >= 2) out.push({ kind: "blue", title: "Jungle aliado " + jgLevel + " niveis atras", detail: allyJungle.summonerName + " vs " + enemyJungle.summonerName })
+        if (jgCs >= 20) out.push({ kind: "blue", title: "Jungle aliado " + jgCs + " CS atras", detail: allyJungle.summonerName + " vs " + enemyJungle.summonerName })
       }
 
       return out
@@ -758,27 +1253,27 @@ function html() {
         const next = kills.length ? kills[0] + def.respawn : def.first
         const remaining = next - gameTime
         if (remaining > 0 && remaining <= 60) {
-          out.push({ kind: "blue", title: "1 min para " + def.label, detail: "Nasce em " + fmt(remaining) + " · tempo de jogo " + fmt(gameTime) })
+          out.push({ title: "1 min para " + def.label, detail: "Nasce em " + fmt(remaining) + " · tempo de jogo " + fmt(gameTime) })
         }
         if (remaining <= 0 && remaining >= -45) {
-          out.push({ kind: "blue", title: def.label + " disponivel", detail: "Janela aberta ha " + fmt(Math.abs(remaining)) })
+          out.push({ title: def.label + " disponivel", detail: "Janela aberta ha " + fmt(Math.abs(remaining)) })
         }
         if (context && remaining <= 60 && remaining >= -30) {
           const deadEnemies = context.liveEnemy.filter(p => p.isDead).length
           const deadAllies = context.liveAlly.filter(p => p.isDead).length
-          if (deadEnemies >= 3) out.push({ kind: "green", title: "Janela de " + def.label, detail: deadEnemies + " inimigos mortos perto do objetivo" })
-          else if (deadEnemies >= 2) out.push({ kind: "blue", title: "Possivel janela de " + def.label, detail: deadEnemies + " inimigos mortos perto do objetivo" })
-          if (deadAllies >= 3) out.push({ kind: "red", title: "Evitar luta por " + def.label, detail: deadAllies + " aliados mortos perto do objetivo" })
+          if (deadEnemies >= 3) out.push({ kind: "red", title: "Janela de " + def.label, detail: deadEnemies + " inimigos mortos perto do objetivo" })
+          else if (deadEnemies >= 2) out.push({ kind: "red", title: "Possivel janela de " + def.label, detail: deadEnemies + " inimigos mortos perto do objetivo" })
+          if (deadAllies >= 3) out.push({ kind: "blue", title: "Evitar luta por " + def.label, detail: deadAllies + " aliados mortos perto do objetivo" })
           const allyJg = findByPosition(context.liveAlly, context.allyAnalysis, "JUNGLE")
           const enemyJg = findByPosition(context.liveEnemy, context.enemyAnalysis, "JUNGLE")
-          if (allyJg?.isDead) out.push({ kind: "red", title: "Jungler aliado morto antes de " + def.label, detail: allyJg.summonerName + " sem pressao de smite" })
-          if (enemyJg?.isDead) out.push({ kind: "green", title: "Jungler inimigo morto antes de " + def.label, detail: enemyJg.summonerName + " sem pressao de smite" })
+          if (allyJg?.isDead) out.push({ kind: "blue", title: "Jungler aliado morto antes de " + def.label, detail: allyJg.summonerName + " sem pressao de smite" })
+          if (enemyJg?.isDead) out.push({ kind: "red", title: "Jungler inimigo morto antes de " + def.label, detail: enemyJg.summonerName + " sem pressao de smite" })
         }
       }
       const dragons = events.filter(e => e.event_type === "objective" && e.data?.type === "dragon").length
-      if (dragons >= 3) out.push({ kind: "yellow", title: "Checar soul point", detail: dragons + " dragoes registrados nesta partida" })
+      if (dragons >= 3) out.push({ title: "Checar soul point", detail: dragons + " dragoes registrados nesta partida" })
       const earlyTower = events.find(e => e.event_type === "objective" && e.data?.type === "tower" && Number(e.data?.eventTime ?? 9999) <= 840)
-      if (earlyTower) out.push({ kind: "yellow", title: "Torre caiu antes de 14 min", detail: "Plates/rota podem ter aberto cedo" })
+      if (earlyTower) out.push({ title: "Torre caiu antes de 14 min", detail: "Plates/rota podem ter aberto cedo" })
       return out
     }
 
@@ -850,7 +1345,11 @@ function html() {
       if (type === "gameflow_phase") return (d.previousPhase || "?") + " -> " + (d.phase || "?")
       if (type === "game_update" || type === "game_start") return fmt(d.gameTime) + " Â· KDA " + (d.me?.kills ?? 0) + "/" + (d.me?.deaths ?? 0) + "/" + (d.me?.assists ?? 0)
       if (type === "game_end") return "Duracao " + fmt(d.gameTime)
-      if (type === "post_game_analysis") return d.status === "pronto" ? "Analise pronta: " + (d.analysis?.resumo || "") : "Analise pos-jogo " + (d.status || "")
+      if (type === "post_game_analysis") {
+        if (d.status === "pronto") return "Analise pronta: " + (d.analysis?.resumo || "")
+        if (d.status === "ignorado") return "Analise ignorada: " + (d.detail || "partida curta/remake")
+        return "Analise pos-jogo " + (d.status || "")
+      }
       if (type === "kill") return (d.killer || "?") + " -> " + (d.victim || "?") + " @" + fmt(d.eventTime)
       if (type === "objective") return (d.type || "objective") + " Â· " + (d.killer || "")
       if (type === "champ_select_complete") return (d.myChampionName || "?") + " Â· " + (d.myPosition || "?")
@@ -902,7 +1401,10 @@ presenceChan
     onlineUsers.clear()
     for (const presences of Object.values(state)) {
       const p = presences[presences.length - 1]
-      if (p?.puuid) onlineUsers.set(p.puuid, { puuid: p.puuid, gameName: p.gameName, tagLine: p.tagLine, phase: p.phase, since: p.since })
+      if (p?.puuid) {
+        onlineUsers.set(p.puuid, { puuid: p.puuid, gameName: p.gameName, tagLine: p.tagLine, phase: p.phase, since: p.since })
+        playerState(p.puuid)
+      }
     }
     broadcast()
   })
@@ -922,6 +1424,7 @@ supabase
 setInterval(() => broadcast(), 1_000)
 
 await hydrateEvents()
+await retryFailedPostGameAnalyses()
 
 server.listen(PORT, () => {
   console.log(`[watch-ui] IDV Watch UI aberta em http://localhost:${PORT}`)

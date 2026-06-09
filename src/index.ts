@@ -5,7 +5,7 @@ import { createClient, type RealtimeChannel } from "@supabase/supabase-js"
 import { waitForLcu, subscribeToGameflow, getChampSelectSession, getCurrentSummoner, getCurrentRunes, lcuGet } from "./lcu.js"
 import { getAllGameData, isGameRunning, type AllGameData, type LiveGameEvent } from "./live-client.js"
 import { publishEvent } from "./publisher.js"
-import { analyzeLoadingScreen } from "./loading-analysis.js"
+import { analyzeLoadingScreen, type LoadingAnalysisResult } from "./loading-analysis.js"
 
 let champMap: Map<number, string> | null = null
 
@@ -91,6 +91,7 @@ let lastEventId = -1
 let lastItemsFingerprint = ""
 let lastKnownGameTime = 0
 let gameEndSent = false
+let loadingAnalysisRunId = 0
 
 // â”€â”€â”€ Champ Select â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -366,6 +367,8 @@ async function sendGameUpdate(type: "game_start" | "game_update") {
   const myTeamForKp = order.find(p => matchesMe(p.summonerName)) ? order : chaos
   const teamK = teamKills(myTeamForKp)
   const kp = teamK > 0 ? +(((kills + assists) / teamK) * 100).toFixed(0) : 0
+
+  if (type === "game_update") await sendScoreboard(data)
 
   await publishEvent(myPuuid, type, {
     gameTime,
@@ -753,6 +756,32 @@ async function markLeagueClientClosed() {
   console.log(`[agent] League Client desconectado: ${prev} -> LoLClosed`)
   await updatePresence("LoLClosed", true)
 }
+
+function shouldRetryLoadingAnalysis(result: LoadingAnalysisResult) {
+  if (result.complete) return false
+  if (result.participantCount < result.expectedPlayers) return true
+  return result.rankedCount < Math.max(1, Math.floor(result.participantCount * 0.7))
+}
+
+function scheduleLoadingAnalysisRetries(puuid: string) {
+  const runId = ++loadingAnalysisRunId
+  const delays = [0, 5_000, 15_000, 30_000, 60_000]
+
+  delays.forEach((delay, index) => {
+    setTimeout(async () => {
+      if (runId !== loadingAnalysisRunId) return
+      if (!["GameStart", "InProgress"].includes(currentPhase)) return
+
+      try {
+        const result = await analyzeLoadingScreen(puuid, index + 1)
+        if (!shouldRetryLoadingAnalysis(result)) loadingAnalysisRunId++
+      } catch (e) {
+        console.warn("[loading] Erro:", (e as Error).message)
+      }
+    }, delay)
+  })
+}
+
 async function onPhaseChange(phase: string) {
   if (phase === currentPhase) return
   const prev = currentPhase
@@ -772,7 +801,7 @@ async function onPhaseChange(phase: string) {
 
   if (phase === "GameStart") {
     stopChampSelectPolling()
-    if (myPuuid) analyzeLoadingScreen(myPuuid).catch(e => console.warn("[loading] Erro:", e))
+    if (myPuuid) scheduleLoadingAnalysisRetries(myPuuid)
     await startGameTracking()
   }
 
@@ -782,12 +811,14 @@ async function onPhaseChange(phase: string) {
   }
 
   if (phase === "WaitingForStats" || phase === "PreEndOfGame" || phase === "EndOfGame" || phase === "TerminatedInError") {
+    loadingAnalysisRunId++
     await handleGameEnd()
     stopChampSelectPolling()
     stopGameTracking()
   }
 
   if (phase === "None" || phase === "Lobby") {
+    loadingAnalysisRunId++
     stopChampSelectPolling()
     stopGameTracking()
     champSelectSent = false
