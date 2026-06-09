@@ -3,6 +3,14 @@ import https from "https"
 const RIOT_API_KEY = process.env.RIOT_API_KEY ?? ""
 const RIOT_REGION  = (process.env.RIOT_REGION  ?? "br1").toLowerCase()
 
+// Match V5 uses regional clusters, not platform endpoints
+const CLUSTER_MAP: Record<string, string> = {
+  br1: "americas", na1: "americas", la1: "americas", la2: "americas", oc1: "sea",
+  euw1: "europe", eune1: "europe", tr1: "europe", ru: "europe",
+  kr: "asia", jp1: "asia",
+}
+const RIOT_CLUSTER = CLUSTER_MAP[RIOT_REGION] ?? "americas"
+
 // ─── Rate limiter (sliding window) ───────────────────────────────────────────
 // Dev key limits: 20 req/1s, 100 req/2min.
 // We run slightly below to have headroom.
@@ -52,7 +60,7 @@ function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)) }
 
 // ─── Core fetch ──────────────────────────────────────────────────────────────
 
-async function riotGet<T>(path: string): Promise<T | null> {
+async function riotGet<T>(path: string, host = `${RIOT_REGION}.api.riotgames.com`): Promise<T | null> {
   if (!RIOT_API_KEY) return null
 
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -66,7 +74,7 @@ async function riotGet<T>(path: string): Promise<T | null> {
       await new Promise<void>((resolve, reject) => {
         const req = https.request(
           {
-            host:    `${RIOT_REGION}.api.riotgames.com`,
+            host,
             path,
             method:  "GET",
             headers: { "X-Riot-Token": RIOT_API_KEY },
@@ -180,3 +188,34 @@ export async function riotGetPlayerData(puuid: string): Promise<RiotPlayerData |
 }
 
 export function isRiotApiAvailable(): boolean { return !!RIOT_API_KEY }
+
+// ─── Match V5 (regional cluster routing) ─────────────────────────────────────
+
+type MatchV5Dto = {
+  metadata: { participants: string[] }
+  info: { participants: Array<{ puuid: string; win: boolean; championId: number }> }
+}
+
+export async function riotGetRecentMatchResults(
+  puuid: string,
+  count = 10,
+): Promise<Array<{ win: boolean; championId: number }>> {
+  const clusterHost = `${RIOT_CLUSTER}.api.riotgames.com`
+
+  const ids = await riotGet<string[]>(
+    `/lol/match/v5/matches/by-puuid/${encodeURIComponent(puuid)}/ids?type=ranked&count=${count}`,
+    clusterHost,
+  )
+  if (!ids?.length) return []
+
+  const matches = await Promise.all(
+    ids.map(id => riotGet<MatchV5Dto>(`/lol/match/v5/matches/${encodeURIComponent(id)}`, clusterHost))
+  )
+
+  return matches.flatMap(match => {
+    if (!match) return []
+    const p = match.info.participants.find(pt => pt.puuid === puuid)
+    if (!p) return []
+    return [{ win: p.win, championId: p.championId }]
+  })
+}

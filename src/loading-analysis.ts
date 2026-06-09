@@ -1,6 +1,6 @@
 import { getGameflowSession, getRankedStats, getSummonerByPuuid, getChampionMastery, getRecentMatchResults } from "./lcu.js"
 import { publishEvent } from "./publisher.js"
-import { riotGetPlayerData, isRiotApiAvailable } from "./riot-api.js"
+import { riotGetPlayerData, riotGetRecentMatchResults, isRiotApiAvailable } from "./riot-api.js"
 
 // ─── MMR estimation ───────────────────────────────────────────────────────────
 // Valores baseados na distribuição histórica do servidor BR1/NA1
@@ -123,12 +123,19 @@ export async function analyzeLoadingScreen(myPuuid: string, attempt = 1): Promis
   // Busca dados de todos os players em paralelo
   const playerData = await Promise.all(allParticipants.map(async (p) => {
     const puuid = p.puuid
-    const [ranked, summoner, mastery, recentMatches] = await Promise.all([
+    const [ranked, summoner, mastery, lcuMatches] = await Promise.all([
       getRankedStats(puuid),
       getSummonerByPuuid(puuid),
       p.championId > 0 ? getChampionMastery(puuid, p.championId) : Promise.resolve(null),
       getRecentMatchResults(puuid, 10),
     ])
+
+    // Riot API fallback for match history when LCU returns empty (retry is built into riotGetRecentMatchResults)
+    let recentMatches = lcuMatches
+    if (recentMatches.length === 0 && isRiotApiAvailable()) {
+      console.log(`[loading] Histórico LCU vazio para ${puuid.slice(0, 8)} — tentando Riot API...`)
+      recentMatches = await riotGetRecentMatchResults(puuid, 10)
+    }
 
     const solo = ranked?.queueMap?.["RANKED_SOLO_5x5"]
     const flex = ranked?.queueMap?.["RANKED_FLEX_SR"]
@@ -154,8 +161,11 @@ export async function analyzeLoadingScreen(myPuuid: string, attempt = 1): Promis
       ? Number(summoner?.summonerLevel)
       : null
 
-    const pos = normalizePos(p.selectedPosition || p.assignedPosition)
-    const smurfFlags = detectSmurfFlags(level, mmr, wins, losses, isUnranked)
+    const pos         = normalizePos(p.assignedPosition || p.selectedPosition)
+    const selectedNorm = normalizePos(p.selectedPosition)
+    // autofill: both positions known, selected ≠ assigned, and player didn't queue as fill
+    const autofill    = !!selectedNorm && !!pos && selectedNorm !== "FILL" && selectedNorm !== pos
+    const smurfFlags  = detectSmurfFlags(level, mmr, wins, losses, isUnranked)
 
     const hotStreak       = q?.hotStreak ?? false
     const streak          = computeStreak(recentMatches)
@@ -180,6 +190,8 @@ export async function analyzeLoadingScreen(myPuuid: string, attempt = 1): Promis
       championId:       p.championId,
       championName:     null,
       assignedPosition: pos,
+      selectedPosition: selectedNorm,
+      autofill,
       spell1Id:         p.spell1Id,
       spell2Id:         p.spell2Id,
       teamId:           p.teamId,
@@ -268,7 +280,7 @@ export async function analyzeLoadingScreen(myPuuid: string, attempt = 1): Promis
     ? enemyTeam.reduce((a, b) => a.mmr >= b.mmr ? a : b)
     : null
 
-  const autofillSuspects: typeof playerData = []
+  const autofillSuspects = playerData.filter(p => p.autofill)
 
   const allSmurfs = playerData.filter(p => p.smurfFlags.length > 0)
 
@@ -289,6 +301,8 @@ export async function analyzeLoadingScreen(myPuuid: string, attempt = 1): Promis
     championId:       p.championId,
     championName:     p.championName,
     assignedPosition: p.assignedPosition,
+    selectedPosition: p.selectedPosition,
+    autofill:         p.autofill,
     spell1Id:         p.spell1Id,
     spell2Id:         p.spell2Id,
     elo:              p.elo,
@@ -326,6 +340,7 @@ export async function analyzeLoadingScreen(myPuuid: string, attempt = 1): Promis
       autofillSuspects: autofillSuspects.map(p => ({
         summonerName:     p.summonerName,
         assignedPosition: p.assignedPosition,
+        selectedPosition: p.selectedPosition,
         spells:           [p.spell1Id, p.spell2Id],
         team:             p.isAlly ? "ALLY" : "ENEMY",
       })),

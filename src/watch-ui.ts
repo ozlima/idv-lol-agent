@@ -1190,11 +1190,14 @@ function html() {
         const streakPill = streakData && streakData.count >= 2
           ? ' <span class="pill ' + (streakData.type === "win" ? "green" : "red") + '">' + streakData.count + (streakData.type === "win" ? "W" : "L") + '</span>'
           : (p.hotStreak && !streakData ? ' <span class="pill green">streak W</span>' : "")
-        const newChampPill = p.newChampion ? ' <span class="pill yellow">novo champ</span>' : ""
+        const newChampPill  = p.newChampion ? ' <span class="pill yellow">novo champ</span>' : ""
+        const autofillPill  = p.autofill
+          ? ' <span class="pill orange">' + esc(p.selectedPosition || "?") + '→' + esc(p.assignedPosition || "?") + '</span>'
+          : ""
 
         cards.push(
           '<div class="analysis-player' + (hasRisk ? " risk" : "") + '">' +
-          '<div class="ap-head">' + champHtml + streakPill + newChampPill + '</div>' +
+          '<div class="ap-head">' + champHtml + streakPill + newChampPill + autofillPill + '</div>' +
           subNameHtml +
           '<div class="sub">' + esc(detail) + '</div>' +
           (flags.length ? '<div class="risk-flags">' + esc(flags.map(f => f.label).join(" · ")) + '</div>' : '') +
@@ -1399,7 +1402,7 @@ function html() {
         out.push({
           kind: a.team === "ALLY" ? "blue" : "red",
           title: pickStable(titles, key),
-          detail: (a.team === "ALLY" ? "Aliado" : "Inimigo") + " - " + a.assignedPosition + " - spells " + (a.spells || []).join("/"),
+          detail: (a.team === "ALLY" ? "Aliado" : "Inimigo") + " · " + (a.selectedPosition || a.assignedPosition) + " → " + a.assignedPosition,
         })
       }
       return out

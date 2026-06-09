@@ -273,6 +273,7 @@ async function sendScoreboard(data?: AllGameData) {
     deaths:       p.scores?.deaths     ?? 0,
     assists:      p.scores?.assists    ?? 0,
     cs:           p.scores?.creepScore ?? 0,
+    wardScore:    p.scores?.wardScore  ?? 0,
     items:        await Promise.all((p.items ?? []).map(async i => ({ id: i.itemID, name: i.displayName, price: await getItemPrice(i.itemID) }))),
     netWorth:     await calcNetWorth(p.items ?? []),
     isMe:         matchesMe(p.summonerName),
@@ -360,10 +361,11 @@ async function sendGameUpdate(type: "game_start" | "game_update") {
 
   // KDA/CS vÃªm de allPlayers (mais confiÃ¡vel que activePlayer.scores)
   const meInAll = allPlayers.find(p => matchesMe(p.summonerName))
-  const kills   = meInAll?.scores?.kills      ?? ap.scores?.kills      ?? 0
-  const deaths  = meInAll?.scores?.deaths     ?? ap.scores?.deaths     ?? 0
-  const assists = meInAll?.scores?.assists    ?? ap.scores?.assists    ?? 0
-  const cs      = meInAll?.scores?.creepScore ?? ap.scores?.creepScore ?? 0
+  const kills     = meInAll?.scores?.kills      ?? ap.scores?.kills      ?? 0
+  const deaths    = meInAll?.scores?.deaths     ?? ap.scores?.deaths     ?? 0
+  const assists   = meInAll?.scores?.assists    ?? ap.scores?.assists    ?? 0
+  const cs        = meInAll?.scores?.creepScore ?? ap.scores?.creepScore ?? 0
+  const wardScore = meInAll?.scores?.wardScore  ?? ap.scores?.wardScore  ?? 0
 
   // level e currentGold ficam diretamente em activePlayer
   const level = ap.level ?? meInAll?.level ?? 0
@@ -382,6 +384,7 @@ async function sendGameUpdate(type: "game_start" | "game_update") {
     me: {
       summonerName: ap.summonerName,
       kills, deaths, assists, cs, cspm,
+      wardScore,
       gold, level,
       maxHp: Math.round(apStats?.maxHealth ?? 0),
       killParticipation: kp,
@@ -408,6 +411,7 @@ async function sendGameUpdate(type: "game_start" | "game_update") {
       deaths:       p.scores?.deaths     ?? 0,
       assists:      p.scores?.assists    ?? 0,
       cs:           p.scores?.creepScore ?? 0,
+      wardScore:    p.scores?.wardScore  ?? 0,
       items:        p.items?.map(i => i.displayName) ?? [],
     })),
   })
