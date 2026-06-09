@@ -521,6 +521,10 @@ function html() {
     .player-tab.active { color: var(--text); border-color: rgba(100,168,255,.65); background: rgba(100,168,255,.12); }
     .player-tab-name { overflow: hidden; text-overflow: ellipsis; font-weight: 800; }
     .player-tab-phase { color: var(--muted); font-size: 11px; }
+    .ver-badge { font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 4px; font-family: monospace; flex-shrink: 0; }
+    .ver-badge.ok      { background: rgba(66,210,125,.18); color: var(--green); }
+    .ver-badge.old     { background: rgba(255,200,0,.18);  color: var(--yellow); }
+    .ver-badge.unknown { background: rgba(255,255,255,.08); color: var(--muted); }
     main {
       flex: 1;
       display: grid;
@@ -904,14 +908,14 @@ function html() {
         const phase = p.latestGameflow?.phase || presence.phase || "-"
         const active = current?.puuid === p.puuid ? " active" : ""
         const agentVer = presence.version || ""
-        const verOk = agentVer && latest && agentVer === latest
+        const verOk  = agentVer && latest && agentVer === latest
         const verOld = agentVer && latest && agentVer !== latest
-        const verDot = verOk
-          ? '<span title="Atualizado ' + esc(agentVer) + '" style="width:7px;height:7px;border-radius:999px;background:var(--green);display:inline-block;margin-left:4px"></span>'
+        const verBadge = verOk
+          ? '<span class="ver-badge ok" title="' + esc(agentVer) + '">' + esc(agentVer) + '</span>'
           : verOld
-            ? '<span title="Desatualizado: ' + esc(agentVer) + ' vs ' + esc(latest) + '" style="width:7px;height:7px;border-radius:999px;background:var(--yellow);display:inline-block;margin-left:4px"></span>'
-            : ''
-        return '<button class="player-tab' + active + '" data-puuid="' + esc(p.puuid) + '"><span class="dot"></span><span class="player-tab-name">' + esc(name) + verDot + '</span><span class="player-tab-phase">' + esc(phase) + '</span></button>'
+            ? '<span class="ver-badge old" title="desatualizado: ' + esc(agentVer) + ' (atual: ' + esc(latest) + ')">' + esc(agentVer) + ' ⚠</span>'
+            : '<span class="ver-badge unknown" title="versao desconhecida — aguardando pull">?</span>'
+        return '<button class="player-tab' + active + '" data-puuid="' + esc(p.puuid) + '"><span class="dot"></span><span class="player-tab-name">' + esc(name) + '</span>' + verBadge + '<span class="player-tab-phase">' + esc(phase) + '</span></button>'
       }).join("") || '<span class="sub">Nenhum agent com eventos ainda</span>'
       for (const btn of document.querySelectorAll(".player-tab")) {
         btn.onclick = () => {
