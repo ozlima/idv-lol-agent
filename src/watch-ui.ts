@@ -496,6 +496,23 @@ function html() {
     }
     .metric label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
     .metric strong { font-size: 18px; }
+    .mmr-compare {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px;
+      margin-top: 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #14171a;
+    }
+    .mmr-compare-team { display: flex; flex-direction: column; gap: 3px; }
+    .mmr-compare-team.right { text-align: right; }
+    .mmr-compare-tier { font-weight: 800; font-size: 17px; }
+    .mmr-compare-mmr { color: var(--muted); font-size: 12px; }
+    .mmr-compare-center { text-align: center; }
+    .mmr-compare-vs { font-size: 13px; font-weight: 800; color: var(--muted); }
+    .mmr-compare-diff { font-size: 12px; margin-top: 4px; font-weight: 700; }
     .gold-chart {
       position: relative;
       margin-top: 12px;
@@ -642,6 +659,7 @@ function html() {
               <div class="metric"><label>Gold Diff</label><strong id="gold">-</strong></div>
               <div class="metric"><label>Online</label><strong id="online">0</strong></div>
             </div>
+            <div id="mmr-compare" class="mmr-compare" style="display:none"></div>
             <div id="gold-chart" class="gold-chart"></div>
           </div>
         </div>
@@ -689,6 +707,25 @@ function html() {
       sec = Math.max(0, Math.floor(sec || 0))
       return Math.floor(sec / 60) + ":" + String(sec % 60).padStart(2, "0")
     }
+    function mmrToEloLabel(mmr) {
+      if (!mmr) return "?"
+      const tiers = [
+        ["Challenger", 2900], ["Grandmaster", 2700], ["Master", 2450],
+        ["Diamond", 2150], ["Emerald", 1900], ["Platinum", 1650],
+        ["Gold", 1400], ["Silver", 1100], ["Bronze", 850], ["Iron", 500],
+      ]
+      for (const [tier, base] of tiers) {
+        if (mmr >= base) {
+          if (tier === "Master" || tier === "Grandmaster" || tier === "Challenger") return tier
+          const offset = mmr - base
+          if (offset >= 225) return tier + " I"
+          if (offset >= 150) return tier + " II"
+          if (offset >= 75)  return tier + " III"
+          return tier + " IV"
+        }
+      }
+      return "Iron IV"
+    }
     setInterval(() => { if (state) render(state) }, 1000)
 
     const es = new EventSource("/events")
@@ -728,14 +765,22 @@ function html() {
       $("game-time").textContent = liveGameTime > 0
         ? fmt(liveGameTime)
         : (phaseElapsed > 3 ? fmt(phaseElapsed) : "-")
-      $("score").textContent = Number.isFinite(score.order) ? score.order + " x " + score.chaos : "-"
-      $("cs").textContent = Number.isFinite(cs.order) ? cs.order + " x " + cs.chaos : "-"
-
       const sb = current?.latestScoreboard || {}
       const gold = sb.teamGold || {}
       const players = sb.players || []
       const me = players.find(p => p.isMe)
-      const myTeam = me?.team
+      const myTeam = me?.team  // "ORDER" | "CHAOS" | undefined
+
+      // Show my team's score/CS on the left
+      const scoreL = Number.isFinite(score.order)
+        ? (myTeam === "CHAOS" ? score.chaos : score.order) : null
+      const scoreR = Number.isFinite(score.order)
+        ? (myTeam === "CHAOS" ? score.order : score.chaos) : null
+      $("score").textContent = scoreL !== null ? scoreL + " x " + scoreR : "-"
+
+      const csL = Number.isFinite(cs.order) ? (myTeam === "CHAOS" ? cs.chaos : cs.order) : null
+      const csR = Number.isFinite(cs.order) ? (myTeam === "CHAOS" ? cs.order : cs.chaos) : null
+      $("cs").textContent = csL !== null ? csL + " x " + csR : "-"
       const signedGold = Number.isFinite(gold.difference) && myTeam && Number(gu.gameTime ?? sb.gameTime ?? 0) >= 30
         ? (gold.leading === myTeam ? gold.difference : -gold.difference)
         : null
@@ -975,8 +1020,36 @@ function html() {
       $("enemy-bans").innerHTML = renderBans(champSelect?.bans?.enemyTeam || loading?.bans?.enemyTeam || [])
 
       const a = loading?.analysis || {}
-      $("ally-elo").textContent = a.myTeamAvgMmr ? "MMR " + a.myTeamAvgMmr : "-"
-      $("enemy-elo").textContent = a.enemyTeamAvgMmr ? "MMR " + a.enemyTeamAvgMmr : "-"
+      const myMMR    = a.myTeamAvgMmr    || 0
+      const enemyMMR = a.enemyTeamAvgMmr || 0
+      const myElo    = myMMR    ? mmrToEloLabel(myMMR)    : null
+      const enemyElo = enemyMMR ? mmrToEloLabel(enemyMMR) : null
+
+      $("ally-elo").textContent  = myElo    ? myElo    + " · " + myMMR    : "-"
+      $("enemy-elo").textContent = enemyElo ? enemyElo + " · " + enemyMMR : "-"
+
+      const mc = $("mmr-compare")
+      if (myMMR && enemyMMR) {
+        mc.style.display = ""
+        const diff = enemyMMR - myMMR
+        const diffStr  = diff !== 0 ? (diff > 0 ? "+" + diff : String(diff)) + " MMR" : "="
+        const diffColor = diff > 0 ? "var(--red)" : diff < 0 ? "var(--green)" : "var(--muted)"
+        mc.innerHTML =
+          '<div class="mmr-compare-team">' +
+            '<div class="mmr-compare-tier" style="color:var(--blue)">' + esc(myElo) + '</div>' +
+            '<div class="mmr-compare-mmr">Aliados · ' + myMMR + ' MMR</div>' +
+          '</div>' +
+          '<div class="mmr-compare-center">' +
+            '<div class="mmr-compare-vs">VS</div>' +
+            '<div class="mmr-compare-diff" style="color:' + diffColor + '">' + esc(diffStr) + '</div>' +
+          '</div>' +
+          '<div class="mmr-compare-team right">' +
+            '<div class="mmr-compare-tier" style="color:var(--red)">' + esc(enemyElo) + '</div>' +
+            '<div class="mmr-compare-mmr">Inimigos · ' + enemyMMR + ' MMR</div>' +
+          '</div>'
+      } else {
+        mc.style.display = "none"
+      }
       $("ally-analysis").innerHTML = renderAnalysisPanel(allyAnalysis, [a.highestEloMyTeam, a.lowestEloMyTeam], allyChamp, allyLive, a, "ALLY")
       $("enemy-analysis").innerHTML = renderAnalysisPanel(enemyAnalysis, [a.highestEloEnemyTeam, a.lowestEloEnemyTeam], enemyChamp, enemyLive, a, "ENEMY")
     }
