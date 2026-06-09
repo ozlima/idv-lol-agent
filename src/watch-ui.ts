@@ -730,7 +730,7 @@ function html() {
       const xf = t => padL + ((t - minT) / Math.max(1, maxT - minT)) * cW
       const yf = g => mid - (g / maxAbs) * (cH / 2)
 
-      // Split into segments at zero crossings
+      // Split into segments at each zero crossing
       const segs = []
       let seg = { pos: Number(clean[0].signedGold) >= 0, pts: [clean[0]] }
       for (let i = 1; i < clean.length; i++) {
@@ -748,40 +748,40 @@ function html() {
       }
       segs.push(seg)
 
-      const mkLine = pts => pts.map((p, i) =>
+      const mkD = pts => pts.map((p, i) =>
         (i ? "L" : "M") + xf(p.gameTime).toFixed(1) + " " + yf(p.signedGold).toFixed(1)
       ).join(" ")
 
       let out = ""
 
-      // Zero axis line
+      // Zero axis
       out += '<line x1="' + padL + '" y1="' + mid.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + mid.toFixed(1) + '" stroke="rgba(255,255,255,.2)" stroke-width="1"/>'
 
-      // Areas (drawn below lines)
+      // Draw area fills first, then lines on top — inline attrs to avoid CSS conflicts
       for (const s of segs) {
         if (s.pts.length < 2) continue
-        const lp = mkLine(s.pts)
+        const d = mkD(s.pts)
         const x0 = xf(s.pts[0].gameTime).toFixed(1)
         const xN = xf(s.pts[s.pts.length - 1].gameTime).toFixed(1)
-        out += '<path class="area ' + (s.pos ? "blue" : "red") + '" d="' + lp + ' L' + xN + ' ' + mid.toFixed(1) + ' L' + x0 + ' ' + mid.toFixed(1) + ' Z"/>'
+        const areaFill = s.pos ? "rgba(100,168,255,.15)" : "rgba(255,107,107,.15)"
+        out += '<path fill="' + areaFill + '" stroke="none" d="' + d + ' L' + xN + ' ' + mid.toFixed(1) + ' L' + x0 + ' ' + mid.toFixed(1) + ' Z"/>'
       }
-
-      // Lines (drawn on top of areas)
       for (const s of segs) {
         if (s.pts.length < 2) continue
-        out += '<path class="line ' + (s.pos ? "blue" : "red") + '" d="' + mkLine(s.pts) + '"/>'
+        const lineColor = s.pos ? "#64a8ff" : "#ff6b6b"
+        out += '<path fill="none" stroke="' + lineColor + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="' + mkD(s.pts) + '"/>'
       }
 
       // Dot at last point
       const last = clean[clean.length - 1]
       const lx = xf(last.gameTime).toFixed(1), ly = yf(Number(last.signedGold)).toFixed(1)
       const dc = Number(last.signedGold) >= 0 ? "#64a8ff" : "#ff6b6b"
-      out += '<circle cx="' + lx + '" cy="' + ly + '" r="5" fill="' + dc + '" opacity=".2"/>'
+      out += '<circle cx="' + lx + '" cy="' + ly + '" r="5" fill="' + dc + '" opacity=".18"/>'
       out += '<circle cx="' + lx + '" cy="' + ly + '" r="2.5" fill="' + dc + '"/>'
 
-      // Y-axis labels
+      // Y-axis labels (separate non-stretched SVG overlay via foreignObject)
       const fmtK = v => v >= 1000 ? (v / 1000).toFixed(1).replace(/\.0$/, "") + "k" : String(Math.round(v))
-      const lbl = (y, txt) => '<text class="gold-chart-label" text-anchor="end" x="' + (padL - 5) + '" y="' + y + '" dy=".35em">' + txt + "</text>"
+      const lbl = (y, txt) => '<text text-anchor="end" x="' + (padL - 5) + '" y="' + y + '" dy=".35em" fill="rgba(255,255,255,.38)" font-size="10" font-family="Inter,sans-serif">' + txt + "</text>"
       out += lbl(padT + 2, "+" + fmtK(maxAbs))
       out += lbl(mid, "0")
       out += lbl(H - padB - 2, "-" + fmtK(maxAbs))
