@@ -764,16 +764,24 @@ function applyZipCodeUpdate(remoteSha: string, isUnderPM2: boolean): boolean {
     const zipPath = join(appRoot, "agent-update.zip")
     const tmpDir = join(appRoot, "agent-update-src")
 
+    const agentDir = process.cwd().replace(/\\/g, "\\\\")
+    const rawBase = "https://raw.githubusercontent.com/ozlima/idv-lol-agent/master"
+    const files = [
+      "package.json","package-lock.json","tsconfig.json",
+      "src/index.ts","src/lcu.ts","src/live-client.ts","src/loading-analysis.ts",
+      "src/post-game-analysis.ts","src/publisher.ts","src/riot-api.ts",
+      "src/watch-ui.ts","src/watch.ts",
+      "IDV-Tracker-Installer/IDV-Tracker.bat",
+    ]
+    const psFiles = files.map(f =>
+      `Invoke-WebRequest -Uri '${rawBase}/${f}' -OutFile (Join-Path '${agentDir}' '${f.replace(/\//g, "\\\\")}') -UseBasicParsing`
+    ).join("; ")
     execSync(
       `powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; ` +
-      `[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; ` +
-      `if (Test-Path '${zipPath}') { Remove-Item -LiteralPath '${zipPath}' -Force }; ` +
-      `if (Test-Path '${tmpDir}') { Remove-Item -LiteralPath '${tmpDir}' -Recurse -Force }; ` +
-      `Invoke-WebRequest 'https://github.com/ozlima/idv-lol-agent/archive/refs/heads/master.zip' -OutFile '${zipPath}'; ` +
-      `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${tmpDir}' -Force; ` +
-      `Copy-Item -Path (Join-Path '${tmpDir}' 'idv-lol-agent-master\\*') -Destination '${process.cwd()}' -Recurse -Force; ` +
-      `Remove-Item -LiteralPath '${zipPath}' -Force; ` +
-      `Remove-Item -LiteralPath '${tmpDir}' -Recurse -Force"`,
+      `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072-bor 12288); ` +
+      `New-Item -ItemType Directory -Path (Join-Path '${agentDir}' 'src') -Force | Out-Null; ` +
+      `New-Item -ItemType Directory -Path (Join-Path '${agentDir}' 'IDV-Tracker-Installer') -Force | Out-Null; ` +
+      `${psFiles}"`,
       { stdio: "inherit", cwd: process.cwd() }
     )
 

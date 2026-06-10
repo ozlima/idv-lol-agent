@@ -110,8 +110,13 @@ function Download-Agent {
     throw "package.json nao foi baixado para $AgentDir"
   }
 
-  Set-Content -LiteralPath (Join-Path $AgentDir ".idv-version") -Value $Branch -Encoding UTF8
-  Step "Arquivos baixados"
+  $sha = ""
+  try {
+    $commitApi = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/commits/$Branch" -UseBasicParsing -Headers @{ "User-Agent" = "idv-installer" }
+    $sha = $commitApi.sha
+  } catch { }
+  Set-Content -LiteralPath (Join-Path $AgentDir ".idv-version") -Value ($sha ? $sha : "unknown") -Encoding UTF8
+  Step "Arquivos baixados ($($sha ? $sha.Substring(0,7) : 'sha desconhecido'))"
 }
 
 function Install-Agent {
