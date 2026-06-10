@@ -4,7 +4,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+[Net.ServicePointManager]::SecurityProtocol = [Enum]::ToObject([Net.SecurityProtocolType], 3072 -bor 12288)
+
+Write-Host "install-test v5" -ForegroundColor Yellow
 
 $Repo = "ozlima/idv-lol-agent"
 $NodeVersion = "22.11.0"
@@ -96,10 +98,11 @@ function Download-Agent {
     "IDV-Tracker-Installer/IDV-Tracker.bat"
   )
 
-  Step "Baixando $($agentFiles.Count) arquivos..."
+  Step "Baixando $($agentFiles.Count) arquivos de raw.githubusercontent.com..."
   foreach ($f in $agentFiles) {
     $url = "$rawBase/$f"
     $dest = Join-Path $AgentDir $f
+    Write-Host "  GET $url" -ForegroundColor DarkGray
     Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
   }
 
