@@ -8,8 +8,17 @@ import { publishEvent } from "./publisher.js"
 import { analyzeLoadingScreen, type LoadingAnalysisResult } from "./loading-analysis.js"
 
 function readGitCommit(): string {
-  try { return execSync("git rev-parse --short HEAD", { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore","pipe","pipe"] }).trim() }
-  catch { return "unknown" }
+  try {
+    return execSync("git rev-parse --short HEAD", { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore","pipe","pipe"] }).trim()
+  } catch {
+    // zip install: sem .git, usa .idv-version (SHA completo gravado pelo instalador)
+    try {
+      const sha = readFileSync(join(process.cwd(), ".idv-version"), "utf8").trim()
+      return sha.slice(0, 7) || "unknown"
+    } catch {
+      return "unknown"
+    }
+  }
 }
 const AGENT_VERSION = readGitCommit()
 
