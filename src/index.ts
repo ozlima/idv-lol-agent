@@ -1028,10 +1028,8 @@ async function main() {
       if (isGitCheckout()) {
         applyCodeUpdate("comando admin", isUnderPM2)
       } else {
-        void getRemoteCommitSha().then(sha => {
-          if (sha) applyZipCodeUpdate(sha, isUnderPM2)
-          else console.warn("[agent] Broadcast update: nao foi possivel obter SHA remoto")
-        })
+        console.log("[agent] Broadcast update recebido — forçando update via raw.githubusercontent.com")
+        applyZipCodeUpdate("forced", isUnderPM2)
       }
     })
     .subscribe((status) => {
