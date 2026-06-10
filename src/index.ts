@@ -739,17 +739,12 @@ function getLocalZipVersion(): string {
 
 async function getRemoteCommitSha(): Promise<string | null> {
   try {
-    const res = await fetch("https://api.github.com/repos/ozlima/idv-lol-agent/commits/master", {
-      headers: { "User-Agent": "idv-lol-agent" },
-    })
-    if (!res.ok) {
-      console.warn(`[agent] GitHub API retornou ${res.status}`)
-      return null
-    }
-    const data = await res.json() as { sha?: string }
-    return data.sha ?? null
+    const res = await fetch("https://raw.githubusercontent.com/ozlima/idv-lol-agent/master/VERSION")
+    if (!res.ok) return null
+    const sha = (await res.text()).trim()
+    return sha.length >= 40 ? sha : null
   } catch (e) {
-    console.warn("[agent] GitHub API falhou:", (e as Error).message)
+    console.warn("[agent] Falha ao ler VERSION remoto:", (e as Error).message)
     return null
   }
 }
