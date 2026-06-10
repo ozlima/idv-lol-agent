@@ -1024,12 +1024,13 @@ async function main() {
   const adminClient = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!)
   adminClient
     .channel("idv-agent-admin")
-    .on("broadcast", { event: "update" }, () => {
+    .on("broadcast", { event: "update" }, (msg: { payload?: { sha?: string } }) => {
       if (isGitCheckout()) {
         applyCodeUpdate("comando admin", isUnderPM2)
       } else {
-        console.log("[agent] Broadcast update recebido — forçando update via raw.githubusercontent.com")
-        applyZipCodeUpdate("forced", isUnderPM2)
+        const sha = msg?.payload?.sha ?? ""
+        console.log(`[agent] Broadcast update recebido — sha=${sha.slice(0, 7) || "?"} via raw.githubusercontent.com`)
+        applyZipCodeUpdate(sha, isUnderPM2)
       }
     })
     .subscribe((status) => {

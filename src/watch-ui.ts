@@ -8,15 +8,18 @@ import { generatePostGameAnalysis, type EndGameSnapshot } from "./post-game-anal
 
 config()
 
-function readCurrentVersion(): string {
+function readCurrentVersion(): { short: string; full: string } {
   try {
     const sha = readFileSync(join(process.cwd(), "VERSION"), "utf8").trim()
-    if (sha.length >= 7) return sha.slice(0, 7)
+    if (sha.length >= 7) return { short: sha.slice(0, 7), full: sha }
   } catch {}
-  try { return execSync("git rev-parse --short HEAD", { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore","pipe","pipe"] }).trim() }
-  catch { return "unknown" }
+  try {
+    const sha = execSync("git rev-parse HEAD", { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore","pipe","pipe"] }).trim()
+    return { short: sha.slice(0, 7), full: sha }
+  } catch {}
+  return { short: "unknown", full: "unknown" }
 }
-const CURRENT_VERSION = readCurrentVersion()
+const { short: CURRENT_VERSION, full: CURRENT_VERSION_FULL } = readCurrentVersion()
 
 const SUPABASE_URL = process.env.SUPABASE_URL!
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY!
@@ -2096,7 +2099,7 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.method === "POST" && url.pathname === "/api/force-update") {
-    void adminChan.send({ type: "broadcast", event: "update", payload: {} })
+    void adminChan.send({ type: "broadcast", event: "update", payload: { sha: CURRENT_VERSION_FULL } })
     sendJson(res, 200, { sent: true })
     console.log("[watch-ui] Broadcast de update enviado para agents")
     return
