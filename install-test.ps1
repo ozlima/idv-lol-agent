@@ -73,43 +73,31 @@ function Install-NodePortable {
 
 function Download-Agent {
   Step "Baixando IDV Tracker do GitHub ($Branch)..."
-  $zip = Join-Path $AppRoot "agent.zip"
-  $tmp = Join-Path $AppRoot "agent-src"
-  $repoZip = "https://github.com/$Repo/archive/refs/heads/$Branch.zip"
 
-  if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
-  if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
   if (Test-Path -LiteralPath $AgentDir) { Remove-Item -LiteralPath $AgentDir -Recurse -Force }
-
-  $curlExe = "$env:SystemRoot\System32\curl.exe"
-  if (Test-Path $curlExe) {
-    & $curlExe -L --silent --show-error -o $zip $repoZip
-    if ($LASTEXITCODE -ne 0) { throw "curl falhou com codigo $LASTEXITCODE ao baixar $repoZip" }
-  } else {
-    try {
-      $wc = New-Object System.Net.WebClient
-      $wc.DownloadFile($repoZip, $zip)
-    } catch {
-      Invoke-WebRequest -Uri $repoZip -OutFile $zip -UseBasicParsing
-    }
-  }
-  Expand-Archive -LiteralPath $zip -DestinationPath $tmp -Force
-
-  $source = Get-ChildItem -LiteralPath $tmp -Directory | Select-Object -First 1
-  if (-not $source) { throw "Nao foi possivel localizar os arquivos extraidos do GitHub" }
-
   New-Item -ItemType Directory -Path $AgentDir -Force | Out-Null
-  Copy-Item -Path (Join-Path $source.FullName "*") -Destination $AgentDir -Recurse -Force
+
+  # Usa GitHub Tree API + raw.githubusercontent.com (evita codeload.github.com)
+  $treeUrl = "https://api.github.com/repos/$Repo/git/trees/$Branch?recursive=1"
+  $tree = Invoke-RestMethod -Uri $treeUrl -UseBasicParsing
+  $files = $tree.tree | Where-Object { $_.type -eq "blob" }
+
+  Step "Baixando $($files.Count) arquivos..."
+  foreach ($file in $files) {
+    $rawUrl = "https://raw.githubusercontent.com/$Repo/$Branch/$($file.path)"
+    $destPath = Join-Path $AgentDir $file.path
+    $destDir = Split-Path -Parent $destPath
+    if (-not (Test-Path -LiteralPath $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
+    Invoke-WebRequest -Uri $rawUrl -OutFile $destPath -UseBasicParsing
+  }
 
   if (-not (Test-Path -LiteralPath (Join-Path $AgentDir "package.json"))) {
-    throw "package.json nao foi extraido para $AgentDir"
+    throw "package.json nao foi baixado para $AgentDir"
   }
 
-  $commit = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/commits/$Branch"
+  $commit = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/commits/$Branch" -UseBasicParsing
   Set-Content -LiteralPath (Join-Path $AgentDir ".idv-version") -Value $commit.sha -Encoding UTF8
 
-  Remove-Item -LiteralPath $zip -Force
-  Remove-Item -LiteralPath $tmp -Recurse -Force
   Step "Arquivos baixados"
 }
 
