@@ -76,28 +76,38 @@ function Download-Agent {
 
   if (Test-Path -LiteralPath $AgentDir) { Remove-Item -LiteralPath $AgentDir -Recurse -Force }
   New-Item -ItemType Directory -Path $AgentDir -Force | Out-Null
+  New-Item -ItemType Directory -Path (Join-Path $AgentDir "src") -Force | Out-Null
+  New-Item -ItemType Directory -Path (Join-Path $AgentDir "IDV-Tracker-Installer") -Force | Out-Null
 
-  # Usa GitHub Tree API + raw.githubusercontent.com (evita codeload.github.com)
-  $treeUrl = "https://api.github.com/repos/$Repo/git/trees/$Branch?recursive=1"
-  $tree = Invoke-RestMethod -Uri $treeUrl -UseBasicParsing
-  $files = $tree.tree | Where-Object { $_.type -eq "blob" }
+  $rawBase = "https://raw.githubusercontent.com/$Repo/$Branch"
+  $agentFiles = @(
+    "package.json",
+    "package-lock.json",
+    "tsconfig.json",
+    "src/index.ts",
+    "src/lcu.ts",
+    "src/live-client.ts",
+    "src/loading-analysis.ts",
+    "src/post-game-analysis.ts",
+    "src/publisher.ts",
+    "src/riot-api.ts",
+    "src/watch-ui.ts",
+    "src/watch.ts",
+    "IDV-Tracker-Installer/IDV-Tracker.bat"
+  )
 
-  Step "Baixando $($files.Count) arquivos..."
-  foreach ($file in $files) {
-    $rawUrl = "https://raw.githubusercontent.com/$Repo/$Branch/$($file.path)"
-    $destPath = Join-Path $AgentDir $file.path
-    $destDir = Split-Path -Parent $destPath
-    if (-not (Test-Path -LiteralPath $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
-    Invoke-WebRequest -Uri $rawUrl -OutFile $destPath -UseBasicParsing
+  Step "Baixando $($agentFiles.Count) arquivos..."
+  foreach ($f in $agentFiles) {
+    $url = "$rawBase/$f"
+    $dest = Join-Path $AgentDir $f
+    Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
   }
 
   if (-not (Test-Path -LiteralPath (Join-Path $AgentDir "package.json"))) {
     throw "package.json nao foi baixado para $AgentDir"
   }
 
-  $commit = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/commits/$Branch" -UseBasicParsing
-  Set-Content -LiteralPath (Join-Path $AgentDir ".idv-version") -Value $commit.sha -Encoding UTF8
-
+  Set-Content -LiteralPath (Join-Path $AgentDir ".idv-version") -Value $Branch -Encoding UTF8
   Step "Arquivos baixados"
 }
 
