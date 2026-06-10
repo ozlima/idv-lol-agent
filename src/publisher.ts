@@ -22,6 +22,8 @@ export type EventType =
   | "gameflow_phase"
   | "queue_start"
   | "ready_check"
+  | "casual_game_start"
+  | "casual_game_end"
 
 export async function publishEvent(
   puuid: string,

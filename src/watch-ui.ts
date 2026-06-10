@@ -64,6 +64,7 @@ type PlayerDashboardState = {
   goldDiffPending: boolean
   // True only after game_start event fires (loading screen does not count)
   gameStarted: boolean
+  casualGame: { queueId: number; queueName: string } | null
 }
 
 // Server-side only settle tracking (Set is not JSON-serialisable — keep out of state)
@@ -130,6 +131,7 @@ function playerState(puuid: string): PlayerDashboardState {
       stableGoldDiff: null,
       goldDiffPending: false,
       gameStarted: false,
+      casualGame: null,
     }
     playerStates.set(puuid, state)
   }
@@ -172,6 +174,7 @@ function pushEvent(row: EventRow, realtime = false) {
       state.stableGoldDiff        = null
       state.goldDiffPending       = false
       state.gameStarted           = false
+      state.casualGame            = null
       resetSettleTracking(row.puuid)
       console.log(`[watch-ui] Nova fila detectada para ${row.puuid.slice(0, 8)} — estado limpo`)
     }
@@ -222,6 +225,10 @@ function pushEvent(row: EventRow, realtime = false) {
   } else if (row.event_type === "game_end") {
     state.gameStarted = false
     state.latestGameEnd = event
+  } else if (row.event_type === "casual_game_start") {
+    state.casualGame = row.data as { queueId: number; queueName: string }
+  } else if (row.event_type === "casual_game_end") {
+    state.casualGame = null
   } else if (row.event_type === "post_game_analysis") {
     state.latestPostGameAnalysis = row.data
   }
@@ -634,6 +641,9 @@ function html() {
     .game-result-scoreboard-row .col-cs   { width: 36px; text-align: right; color: var(--muted); flex-shrink: 0; font-variant-numeric: tabular-nums; }
     .game-result-scoreboard-row .col-gold { width: 48px; text-align: right; color: var(--yellow); flex-shrink: 0; font-variant-numeric: tabular-nums; }
     .game-result-team-label { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; padding: 6px 4px 3px; color: var(--muted); }
+    .casual-banner { padding: 28px 16px; text-align: center; border-radius: 8px; background: rgba(255,255,255,.03); border: 1px solid var(--line); margin-bottom: 10px; }
+    .casual-banner-mode { font-size: 22px; font-weight: 900; color: var(--muted); letter-spacing: -0.5px; }
+    .casual-banner-sub { font-size: 12px; color: #606872; margin-top: 4px; }
     .gold-chart {
       position: relative;
       margin-top: 12px;
@@ -774,6 +784,7 @@ function html() {
         <div class="panel">
           <div class="panel-head"><span class="panel-title">Resumo</span><span id="game-time" class="pill">-</span></div>
           <div class="panel-body">
+            <div id="casual-banner" style="display:none"></div>
             <div id="game-result" style="display:none"></div>
             <div id="mmr-compare" class="mmr-compare" style="display:none"></div>
             <div class="grid-2">
@@ -936,15 +947,17 @@ function html() {
       const gameStarted = !!current?.gameStarted || (!!current?.latestGameUpdate && !current?.latestGameEnd)
       const gameOver = !!current?.latestGameEnd && !gameStarted
       const clientClosed = phase === "LoLClosed"
-      const showPanels = !gameOver && !clientClosed
+      const casualGame = current?.casualGame ?? null
+      renderCasualBanner(casualGame)
+      const showPanels = !gameOver && !clientClosed && !casualGame
       renderGameResult(gameOver ? current?.latestGameEnd : null)
       renderSidePanels(
         showPanels ? current?.latestChampSelect : null,
         showPanels ? current?.latestLoading : null,
         showPanels ? current?.latestScoreboard : null,
       )
-      renderAlerts(current || {})
-      renderPostGameAnalysis(current?.latestPostGameAnalysis)
+      renderAlerts(casualGame ? {} : (current || {}))
+      renderPostGameAnalysis(casualGame ? null : current?.latestPostGameAnalysis)
       renderEvents(current?.events || [])
     }
 
@@ -1125,6 +1138,15 @@ function html() {
       const cs = Number(p.cs ?? 0), gold = Number(p.netWorth ?? 0)
       const kda = (k + a) / Math.max(1, d)
       return kda * 3 + k * 0.5 + a * 0.3 + cs * 0.01 + gold * 0.0002
+    }
+
+    function renderCasualBanner(casualGame) {
+      const el = $("casual-banner")
+      if (!el) return
+      if (!casualGame) { el.style.display = "none"; el.innerHTML = ""; return }
+      const name = esc(casualGame.queueName || "Modo Casual")
+      el.style.display = ""
+      el.innerHTML = '<div class="casual-banner"><div class="casual-banner-mode">🎮 ' + name + '</div><div class="casual-banner-sub">sem monitoramento completo nesse modo</div></div>'
     }
 
     function renderGameResult(gameEnd) {

@@ -2,7 +2,7 @@
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from "fs"
 import { dirname, join } from "path"
 import { createClient, type RealtimeChannel } from "@supabase/supabase-js"
-import { waitForLcu, subscribeToGameflow, getChampSelectSession, getCurrentSummoner, getCurrentRunes, lcuGet, acceptReadyCheck } from "./lcu.js"
+import { waitForLcu, subscribeToGameflow, getChampSelectSession, getCurrentSummoner, getCurrentRunes, lcuGet, acceptReadyCheck, getGameflowSession } from "./lcu.js"
 import { getAllGameData, getEventData, isGameRunning, type AllGameData, type LiveGameEvent } from "./live-client.js"
 import { publishEvent } from "./publisher.js"
 import { analyzeLoadingScreen, type LoadingAnalysisResult } from "./loading-analysis.js"
@@ -77,9 +77,48 @@ type GamePhase =
 
 // â”€â”€â”€ State â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+const MONITORED_QUEUE_IDS = new Set([420, 440]) // Solo/Duo e Flex
+const QUEUE_NAMES: Record<string, string> = {
+  RANKED_SOLO_5x5: "Ranqueada Solo/Duo",
+  RANKED_FLEX_SR:  "Ranqueada Flex",
+  NORMAL:          "Normal Draft",
+  BLIND_PICK:      "Normal Cego",
+  ARAM:            "ARAM",
+  URF:             "URF",
+  ONEFORALL:       "Um Para Todos",
+  CHERRY:          "Arena",
+  ULTBOOK:         "Modo Lendário",
+  CUSTOM:          "Personalizado",
+}
+
 let currentPhase: GamePhase = "None"
 let myPuuid: string | null = null
 let myGameName: string | null = null
+let currentQueueId   = 0
+let currentQueueType = ""
+let casualGameActive = false
+
+function isMonitoredQueue() {
+  if (currentQueueId === 0) return true // desconhecido → assume monitorado
+  return MONITORED_QUEUE_IDS.has(currentQueueId)
+}
+
+function queueDisplayName() {
+  return QUEUE_NAMES[currentQueueType] ?? (currentQueueType || `Fila ${currentQueueId}`)
+}
+
+async function fetchCurrentQueue() {
+  try {
+    const session = await getGameflowSession()
+    if (session?.gameData?.queue?.id) {
+      currentQueueId   = session.gameData.queue.id
+      currentQueueType = session.gameData.queue.type ?? ""
+      console.log(`[agent] Fila detectada: ID=${currentQueueId} (${queueDisplayName()})`)
+    }
+  } catch (e) {
+    console.warn("[agent] Nao foi possivel obter info da fila:", (e as Error).message)
+  }
+}
 
 // Presence
 let presenceChannel: RealtimeChannel | null = null
@@ -836,31 +875,70 @@ async function onPhaseChange(phase: string) {
   }
 
   if (phase === "Matchmaking") {
-    if (myPuuid) await publishEvent(myPuuid, "queue_start", { at: new Date().toISOString() })
+    await fetchCurrentQueue()
+    if (isMonitoredQueue() && myPuuid) {
+      await publishEvent(myPuuid, "queue_start", { at: new Date().toISOString() })
+    }
   }
 
   if (phase === "ReadyCheck") {
-    if (myPuuid) await publishEvent(myPuuid, "ready_check", { at: new Date().toISOString() })
+    if (isMonitoredQueue() && myPuuid) {
+      await publishEvent(myPuuid, "ready_check", { at: new Date().toISOString() })
+    }
   }
 
   if (phase === "ChampSelect") {
-    startChampSelectPolling()
+    if (currentQueueId === 0) await fetchCurrentQueue()
+    if (isMonitoredQueue()) {
+      startChampSelectPolling()
+    } else {
+      console.log(`[agent] Modo casual (${queueDisplayName()}) — champ select nao monitorado`)
+    }
   }
 
   if (phase === "GameStart") {
     stopChampSelectPolling()
-    if (myPuuid) scheduleLoadingAnalysisRetries(myPuuid)
-    await startGameTracking()
+    if (currentQueueId === 0) await fetchCurrentQueue()
+    if (isMonitoredQueue()) {
+      if (myPuuid) scheduleLoadingAnalysisRetries(myPuuid)
+      await startGameTracking()
+    } else {
+      casualGameActive = true
+      if (myPuuid) await publishEvent(myPuuid, "casual_game_start", {
+        queueId:   currentQueueId,
+        queueName: queueDisplayName(),
+        at:        new Date().toISOString(),
+      })
+      console.log(`[agent] Modo casual (${queueDisplayName()}) — tracking ignorado`)
+    }
   }
 
   if (phase === "InProgress" && !updateInterval) {
-    // Jogo jÃ¡ estava em andamento quando o agent iniciou
-    await startGameTracking()
+    if (currentQueueId === 0) await fetchCurrentQueue()
+    if (isMonitoredQueue()) {
+      await startGameTracking()
+    } else if (!casualGameActive) {
+      casualGameActive = true
+      if (myPuuid) await publishEvent(myPuuid, "casual_game_start", {
+        queueId:   currentQueueId,
+        queueName: queueDisplayName(),
+        at:        new Date().toISOString(),
+      })
+    }
   }
 
   if (phase === "WaitingForStats" || phase === "PreEndOfGame" || phase === "EndOfGame" || phase === "TerminatedInError") {
     loadingAnalysisRunId++
-    await handleGameEnd()
+    if (casualGameActive) {
+      casualGameActive = false
+      if (myPuuid) await publishEvent(myPuuid, "casual_game_end", {
+        queueId:   currentQueueId,
+        queueName: queueDisplayName(),
+        at:        new Date().toISOString(),
+      })
+    } else {
+      await handleGameEnd()
+    }
     stopChampSelectPolling()
     stopGameTracking()
   }
@@ -869,8 +947,11 @@ async function onPhaseChange(phase: string) {
     loadingAnalysisRunId++
     stopChampSelectPolling()
     stopGameTracking()
-    champSelectSent = false
+    champSelectSent  = false
     lastHoverChampId = 0
+    currentQueueId   = 0
+    currentQueueType = ""
+    casualGameActive = false
   }
 
   void updatePresence(phase, prev === "LoLClosed")
