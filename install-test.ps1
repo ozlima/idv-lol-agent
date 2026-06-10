@@ -166,6 +166,18 @@ function Install-Agent {
   $vbs = "Set o = CreateObject(""WScript.Shell"")`r`no.Run Chr(34) & ""$Bootstrap"" & Chr(34) & "" --run"", 0, False"
   Set-Content -LiteralPath $StartupVbs -Value $vbs -Encoding ASCII
 
+  Step "Criando atalho de atualizacao na Area de Trabalho..."
+  $desktop = [Environment]::GetFolderPath("Desktop")
+  $shell = New-Object -ComObject WScript.Shell
+  $lnk = $shell.CreateShortcut((Join-Path $desktop "Atualizar IDV Tracker.lnk"))
+  $lnk.TargetPath = "powershell.exe"
+  $lnk.Arguments = '-NoProfile -ExecutionPolicy Bypass -Command "iex (iwr -UseB https://raw.githubusercontent.com/ozlima/idv-lol-agent/master/install-test.ps1).Content"'
+  $lnk.WorkingDirectory = $env:USERPROFILE
+  $lnk.WindowStyle = 1
+  $lnk.Description = "Atualiza o IDV Tracker para a versao mais recente"
+  $lnk.IconLocation = "powershell.exe,0"
+  $lnk.Save()
+
   New-Item -ItemType File -Path (Join-Path $AgentDir ".installed") -Force | Out-Null
 }
 
