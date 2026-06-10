@@ -39,14 +39,16 @@ function Stop-OldInstall {
   }
 
   $current = $PID
-  Get-CimInstance Win32_Process | Where-Object {
+  $procs = Get-CimInstance Win32_Process | Where-Object {
     $_.ProcessId -ne $current -and
     $_.CommandLine -and
     $_.CommandLine.Contains($resolvedAppRoot)
-  } | ForEach-Object {
+  }
+  $procs | ForEach-Object {
     Step "Encerrando processo antigo: $($_.ProcessId) $($_.Name)"
     Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
   }
+  if ($procs) { Start-Sleep -Seconds 2 }
 
   if (Test-Path -LiteralPath $StartupVbs) {
     Step "Removendo inicializacao antiga"
@@ -76,10 +78,7 @@ function Install-NodePortable {
 function Download-Agent {
   Step "Baixando IDV Tracker do GitHub ($Branch)..."
 
-  if (Test-Path -LiteralPath $AgentDir) { Remove-Item -LiteralPath $AgentDir -Recurse -Force }
   New-Item -ItemType Directory -Path $AgentDir -Force | Out-Null
-  New-Item -ItemType Directory -Path (Join-Path $AgentDir "src") -Force | Out-Null
-  New-Item -ItemType Directory -Path (Join-Path $AgentDir "IDV-Tracker-Installer") -Force | Out-Null
 
   $rawBase = "https://raw.githubusercontent.com/$Repo/$Branch"
   $agentFiles = @(
@@ -95,8 +94,12 @@ function Download-Agent {
     "src/riot-api.ts",
     "src/watch-ui.ts",
     "src/watch.ts",
-    "IDV-Tracker-Installer/IDV-Tracker.bat"
+    "IDV-Tracker-Installer/IDV-Tracker.bat",
+    "VERSION"
   )
+
+  New-Item -ItemType Directory -Path (Join-Path $AgentDir "src") -Force | Out-Null
+  New-Item -ItemType Directory -Path (Join-Path $AgentDir "IDV-Tracker-Installer") -Force | Out-Null
 
   Step "Baixando $($agentFiles.Count) arquivos de raw.githubusercontent.com..."
   foreach ($f in $agentFiles) {
@@ -112,8 +115,7 @@ function Download-Agent {
 
   $sha = ""
   try {
-    $commitApi = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/commits/$Branch" -UseBasicParsing -Headers @{ "User-Agent" = "idv-installer" }
-    $sha = $commitApi.sha
+    $sha = (Get-Content -LiteralPath (Join-Path $AgentDir "VERSION") -Encoding UTF8 -Raw).Trim()
   } catch { }
   $versionValue = if ($sha) { $sha } else { "unknown" }
   $versionShort = if ($sha) { $sha.Substring(0,7) } else { "sha desconhecido" }

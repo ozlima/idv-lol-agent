@@ -767,6 +767,7 @@ function applyZipCodeUpdate(remoteSha: string, isUnderPM2: boolean): boolean {
       "src/post-game-analysis.ts","src/publisher.ts","src/riot-api.ts",
       "src/watch-ui.ts","src/watch.ts",
       "IDV-Tracker-Installer/IDV-Tracker.bat",
+      "VERSION",
     ]
     const psFiles = files.map(f =>
       `Invoke-WebRequest -Uri '${rawBase}/${f}' -OutFile (Join-Path '${agentDir}' '${f.replace(/\//g, "\\\\")}') -UseBasicParsing`
@@ -780,8 +781,12 @@ function applyZipCodeUpdate(remoteSha: string, isUnderPM2: boolean): boolean {
       { stdio: "inherit", cwd: process.cwd() }
     )
 
+    let versionToWrite = remoteSha
+    if (!remoteSha || remoteSha.length < 40) {
+      try { versionToWrite = readFileSync(join(process.cwd(), "VERSION"), "utf8").trim() } catch {}
+    }
     refreshBootstrapLauncher()
-    writeFileSync(join(process.cwd(), ".idv-version"), `${remoteSha}\n`, "utf8")
+    writeFileSync(join(process.cwd(), ".idv-version"), `${versionToWrite}\n`, "utf8")
     execSync("npm install --silent", { stdio: "pipe", cwd: process.cwd() })
     console.log("[agent] Codigo atualizado. Reiniciando em 3s...")
     restartAgent(isUnderPM2)
