@@ -115,8 +115,10 @@ function Download-Agent {
     $commitApi = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/commits/$Branch" -UseBasicParsing -Headers @{ "User-Agent" = "idv-installer" }
     $sha = $commitApi.sha
   } catch { }
-  Set-Content -LiteralPath (Join-Path $AgentDir ".idv-version") -Value ($sha ? $sha : "unknown") -Encoding UTF8
-  Step "Arquivos baixados ($($sha ? $sha.Substring(0,7) : 'sha desconhecido'))"
+  $versionValue = if ($sha) { $sha } else { "unknown" }
+  $versionShort = if ($sha) { $sha.Substring(0,7) } else { "sha desconhecido" }
+  Set-Content -LiteralPath (Join-Path $AgentDir ".idv-version") -Value $versionValue -Encoding UTF8
+  Step "Arquivos baixados ($versionShort)"
 }
 
 function Install-Agent {
