@@ -81,7 +81,13 @@ function Download-Agent {
   if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
   if (Test-Path -LiteralPath $AgentDir) { Remove-Item -LiteralPath $AgentDir -Recurse -Force }
 
-  Invoke-WebRequest -Uri $repoZip -OutFile $zip
+  try {
+    $wc = New-Object System.Net.WebClient
+    $wc.DownloadFile($repoZip, $zip)
+  } catch {
+    # fallback com Invoke-WebRequest
+    Invoke-WebRequest -Uri $repoZip -OutFile $zip -UseBasicParsing
+  }
   Expand-Archive -LiteralPath $zip -DestinationPath $tmp -Force
 
   $source = Get-ChildItem -LiteralPath $tmp -Directory | Select-Object -First 1
