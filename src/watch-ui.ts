@@ -1,16 +1,22 @@
 import http from "http"
 import { execSync } from "child_process"
+import { readFileSync } from "fs"
+import { join } from "path"
 import { createClient } from "@supabase/supabase-js"
 import { config } from "dotenv"
 import { generatePostGameAnalysis, type EndGameSnapshot } from "./post-game-analysis.js"
 
 config()
 
-function readGitCommit(): string {
+function readCurrentVersion(): string {
+  try {
+    const sha = readFileSync(join(process.cwd(), "VERSION"), "utf8").trim()
+    if (sha.length >= 7) return sha.slice(0, 7)
+  } catch {}
   try { return execSync("git rev-parse --short HEAD", { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore","pipe","pipe"] }).trim() }
   catch { return "unknown" }
 }
-const CURRENT_VERSION = readGitCommit()
+const CURRENT_VERSION = readCurrentVersion()
 
 const SUPABASE_URL = process.env.SUPABASE_URL!
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY!
