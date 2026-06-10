@@ -877,7 +877,7 @@ async function onPhaseChange(phase: string) {
   if (phase === "Matchmaking") {
     await fetchCurrentQueue()
     if (isMonitoredQueue() && myPuuid) {
-      await publishEvent(myPuuid, "queue_start", { at: new Date().toISOString() })
+      await publishEvent(myPuuid, "queue_start", { at: new Date().toISOString(), gameName: myGameName!, tagLine: presenceMeta?.tagLine ?? "" })
     }
   }
 
