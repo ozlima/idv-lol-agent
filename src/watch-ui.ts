@@ -817,7 +817,7 @@ function html() {
   </div>
   <script>
     let state = null
-    let selectedPuuid = ""
+    let selectedPuuid = new URLSearchParams(window.location.search).get("player") || ""
     let _gcData = null
     let _lastPhaseSeen = ""
     let _phaseAt = 0
@@ -897,6 +897,8 @@ function html() {
 
     function render(s) {
       const current = currentPlayerState(s)
+      const playerName = current?.presence?.gameName || current?.latestGameUpdate?.me?.summonerName || ""
+      document.title = playerName ? playerName + " — IDV Watch" : "IDV Watch"
       renderPlayerTabs(s, current)
       $("online").textContent = s.onlineUsers.length
 
@@ -950,6 +952,7 @@ function html() {
       if (!selectedPuuid || !players.some(p => p.puuid === selectedPuuid)) {
         const online = players.find(p => p.presence) || players[0]
         selectedPuuid = online?.puuid || ""
+        if (selectedPuuid) history.replaceState(null, "", "?player=" + selectedPuuid)
       }
       return players.find(p => p.puuid === selectedPuuid) || players[0]
     }
@@ -976,6 +979,7 @@ function html() {
       for (const btn of document.querySelectorAll(".player-tab")) {
         btn.onclick = () => {
           selectedPuuid = btn.dataset.puuid || ""
+          history.replaceState(null, "", "?player=" + selectedPuuid)
           render(state)
         }
       }
