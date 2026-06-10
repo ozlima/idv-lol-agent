@@ -20,6 +20,8 @@ export type EventType =
   | "objective"
   | "raw_lol_event"
   | "gameflow_phase"
+  | "queue_start"
+  | "ready_check"
 
 export async function publishEvent(
   puuid: string,

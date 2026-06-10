@@ -2,7 +2,7 @@
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from "fs"
 import { dirname, join } from "path"
 import { createClient, type RealtimeChannel } from "@supabase/supabase-js"
-import { waitForLcu, subscribeToGameflow, getChampSelectSession, getCurrentSummoner, getCurrentRunes, lcuGet } from "./lcu.js"
+import { waitForLcu, subscribeToGameflow, getChampSelectSession, getCurrentSummoner, getCurrentRunes, lcuGet, acceptReadyCheck } from "./lcu.js"
 import { getAllGameData, getEventData, isGameRunning, type AllGameData, type LiveGameEvent } from "./live-client.js"
 import { publishEvent } from "./publisher.js"
 import { analyzeLoadingScreen, type LoadingAnalysisResult } from "./loading-analysis.js"
@@ -835,6 +835,14 @@ async function onPhaseChange(phase: string) {
     })
   }
 
+  if (phase === "Matchmaking") {
+    if (myPuuid) await publishEvent(myPuuid, "queue_start", { at: new Date().toISOString() })
+  }
+
+  if (phase === "ReadyCheck") {
+    if (myPuuid) await publishEvent(myPuuid, "ready_check", { at: new Date().toISOString() })
+  }
+
   if (phase === "ChampSelect") {
     startChampSelectPolling()
   }
@@ -939,6 +947,23 @@ async function main() {
     })
     .subscribe((status) => {
       if (status === "SUBSCRIBED") console.log("[agent] Canal admin conectado")
+    })
+
+  // ── Canal de comandos por jogador ──────────────────────────────────────────
+  const cmdClient = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!)
+  cmdClient
+    .channel(`idv-agent-cmd-${myPuuid}`)
+    .on("broadcast", { event: "accept_match" }, async () => {
+      console.log("[agent] Comando recebido: accept_match")
+      try {
+        await acceptReadyCheck()
+        console.log("[agent] Partida aceita via comando Discord")
+      } catch (e) {
+        console.warn("[agent] Falha ao aceitar partida:", (e as Error).message)
+      }
+    })
+    .subscribe((status) => {
+      if (status === "SUBSCRIBED") console.log("[agent] Canal de comandos conectado")
     })
 }
 

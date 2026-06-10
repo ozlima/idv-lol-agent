@@ -14,6 +14,15 @@ export async function lcuGet<T>(path: string): Promise<T> {
   return res.json()
 }
 
+export async function lcuPost(path: string, body: unknown = {}): Promise<void> {
+  const creds = await getLcuCredentials()
+  await request<unknown, void>({ method: "POST", url: path, body }, creds)
+}
+
+export async function acceptReadyCheck(): Promise<void> {
+  await lcuPost("/lol-matchmaking/v1/ready-check/accept")
+}
+
 export async function waitForLcu(): Promise<void> {
   console.log("[lcu] Aguardando cliente do LoL iniciar...")
   credentials = await authenticate({ awaitConnection: true, pollInterval: 3_000, unsafe: true })
