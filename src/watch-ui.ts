@@ -821,8 +821,7 @@ function html() {
     let _gcData = null
     let _lastPhaseSeen = ""
     let _phaseAt = 0
-    let _lastGameTimeSent = 0
-    let _lastGameTimestampAt = 0
+    const _timerByPuuid = new Map() // puuid -> { sent, at }
     const $ = (id) => document.getElementById(id)
     const esc = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]))
     const fmt = (sec) => {
@@ -874,14 +873,17 @@ function html() {
       if (!state) return
       $("clock").textContent = new Date().toLocaleTimeString("pt-BR")
       const current = currentPlayerState(state)
+      const puuid = current?.puuid || ""
+      if (!_timerByPuuid.has(puuid)) _timerByPuuid.set(puuid, { sent: 0, at: 0 })
+      const t = _timerByPuuid.get(puuid)
       const gu = current?.latestGameUpdate || {}
       const gameStarted = !!current?.gameStarted
         || (!!current?.latestGameUpdate && !current?.latestGameEnd)
       const guGameTime = Number(gu.gameTime || 0)
-      if (gameStarted && guGameTime > _lastGameTimeSent) { _lastGameTimeSent = guGameTime; _lastGameTimestampAt = Date.now() }
-      if (!gameStarted) { _lastGameTimeSent = 0; _lastGameTimestampAt = 0 }
-      const liveGameTime = gameStarted && _lastGameTimeSent > 0
-        ? _lastGameTimeSent + (Date.now() - _lastGameTimestampAt) / 1000
+      if (gameStarted && guGameTime > t.sent) { t.sent = guGameTime; t.at = Date.now() }
+      if (!gameStarted) { t.sent = 0; t.at = 0 }
+      const liveGameTime = gameStarted && t.sent > 0
+        ? t.sent + (Date.now() - t.at) / 1000
         : 0
       $("game-time").textContent = liveGameTime > 0 ? fmt(liveGameTime) : "-"
     }, 1000)
