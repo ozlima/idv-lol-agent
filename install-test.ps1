@@ -81,12 +81,17 @@ function Download-Agent {
   if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
   if (Test-Path -LiteralPath $AgentDir) { Remove-Item -LiteralPath $AgentDir -Recurse -Force }
 
-  try {
-    $wc = New-Object System.Net.WebClient
-    $wc.DownloadFile($repoZip, $zip)
-  } catch {
-    # fallback com Invoke-WebRequest
-    Invoke-WebRequest -Uri $repoZip -OutFile $zip -UseBasicParsing
+  $curlExe = "$env:SystemRoot\System32\curl.exe"
+  if (Test-Path $curlExe) {
+    & $curlExe -L --silent --show-error -o $zip $repoZip
+    if ($LASTEXITCODE -ne 0) { throw "curl falhou com codigo $LASTEXITCODE ao baixar $repoZip" }
+  } else {
+    try {
+      $wc = New-Object System.Net.WebClient
+      $wc.DownloadFile($repoZip, $zip)
+    } catch {
+      Invoke-WebRequest -Uri $repoZip -OutFile $zip -UseBasicParsing
+    }
   }
   Expand-Archive -LiteralPath $zip -DestinationPath $tmp -Force
 
