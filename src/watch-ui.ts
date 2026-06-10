@@ -2091,7 +2091,7 @@ presenceChan
     for (const presences of Object.values(state)) {
       const p = presences[presences.length - 1]
       if (p?.puuid) {
-        onlineUsers.set(p.puuid, { puuid: p.puuid, gameName: p.gameName, tagLine: p.tagLine, phase: p.phase, since: p.since })
+        onlineUsers.set(p.puuid, { puuid: p.puuid, gameName: p.gameName, tagLine: p.tagLine, phase: p.phase, version: p.version, since: p.since })
         playerState(p.puuid)
       }
     }
