@@ -77,7 +77,7 @@ type GamePhase =
 
 // â”€â”€â”€ State â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-const MONITORED_QUEUE_IDS = new Set([420, 440]) // Solo/Duo e Flex
+const MONITORED_QUEUE_IDS = new Set([420, 440, 400, 430]) // Solo/Duo, Flex e Normal (para teste)
 const QUEUE_NAMES: Record<string, string> = {
   RANKED_SOLO_5x5: "Ranqueada Solo/Duo",
   RANKED_FLEX_SR:  "Ranqueada Flex",
